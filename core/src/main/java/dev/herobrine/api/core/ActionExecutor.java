@@ -13,10 +13,18 @@ public final class ActionExecutor {
 
     ActionExecutor(ApiContext ctx) { this.ctx = ctx; }
 
+    /** Refuses control actions while the platform says control is blocked (e.g. on multiplayer servers). */
+    private void checkControl(ActionDef a) {
+        if (!a.permission().startsWith("control.")) return;
+        String reason = ctx.controlBlock.get();
+        if (reason != null) throw ApiException.unavailable(reason);
+    }
+
     public Outcome run(ActionDef a, Params p, String owner, int delayTicks, long timeoutMs) {
+        checkControl(a);
         ctx.operations.checkLocks(a.locks(), owner);
         if (delayTicks > 0) {
-            Operations.Op op = ctx.operations.start(a.name(), owner, timeoutMs, a.locks(), new Deferred(delayTicks, () -> a.handler().apply(p)));
+            Operations.Op op = ctx.operations.start(a.name(), owner, timeoutMs, a.locks(), new Deferred(delayTicks, () -> { checkControl(a); return a.handler().apply(p); }));
             return new Outcome(null, Stage.ACCEPTED, op);
         }
         Object r = a.handler().apply(p);
@@ -77,6 +85,7 @@ public final class ActionExecutor {
                     if (delay < 0) delay = s.delayTicks();
                     if (delay-- > 0) return null;
                     delay = -1;
+                    checkControl(s.action());
                     ctx.operations.checkLocks(s.action().locks(), owner);
                     Object r = s.action().handler().apply(s.params());
                     if (r instanceof LongRunning lr) { current = lr; return null; }

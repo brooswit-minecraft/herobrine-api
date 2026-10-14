@@ -251,4 +251,38 @@ class ApiServerTest {
         assertNull(p.nextOffset());
         assertEquals(10, Page.of(all, new Params(obj), 5, 100).limit());
     }
+
+    @Test void controlBlockRefusesControlButNotReads() throws Exception {
+        ctx.controlBlock = () -> "Control is disabled on multiplayer servers";
+        try {
+            var r = exec(controller, "test.echo", "{\"text\":\"hi\"}");
+            assertEquals(409, r.statusCode());
+            assertEquals("ACTION_UNAVAILABLE", obj(r).getAsJsonObject("error").get("code").getAsString());
+            assertEquals(200, call("GET", "/resources/test.info", null, reader).statusCode());
+            // batch (concurrent) reports per-item failure
+            var b = obj(call("POST", "/actions/batch", "{\"mode\":\"concurrent\",\"actions\":[{\"action\":\"test.echo\",\"parameters\":{\"text\":\"a\"}}]}", controller));
+            assertFalse(b.getAsJsonArray("results").get(0).getAsJsonObject().get("success").getAsBoolean());
+        } finally {
+            ctx.controlBlock = () -> null;
+        }
+        assertEquals(200, exec(controller, "test.echo", "{\"text\":\"hi\"}").statusCode());
+    }
+
+    @Test void delayedControlActionIsRecheckedWhenItRuns() throws Exception {
+        var r = call("POST", "/actions/execute", "{\"action\":\"test.echo\",\"parameters\":{\"text\":\"x\"},\"delayTicks\":1}", controller);
+        String id = obj(r).getAsJsonObject("result").get("operationId").getAsString();
+        ctx.controlBlock = () -> "blocked now";
+        try {
+            ctx.operations.tick(); ctx.operations.tick();
+        } finally {
+            ctx.controlBlock = () -> null;
+        }
+        assertEquals("failed", status(controller, id));
+    }
+
+    @Test void cancelAllStopsRunningOperations() throws Exception {
+        String id = startOp(controller, "test.forever");
+        assertTrue(ctx.operations.cancelAll() >= 1);
+        assertEquals("cancelled", status(controller, id));
+    }
 }

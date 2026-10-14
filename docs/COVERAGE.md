@@ -21,6 +21,7 @@ Required artifact (spec §17). Status values: **Tested** = covered by automated 
 | Queuing (§10.3) | `ActionExecutor` | `/actions/batch` | delayed, sequential, concurrent | — | client | Tested | No cron-style scheduling |
 | Resource locks (§10.3) | `Operations.checkLocks` | — | — | — | client | Tested | Locks are advisory names chosen per action |
 | Provider SPI (§7.2) | `ResourceProvider`, `ApiRegistrar` | namespaced `modid.*` | `modid.*` | — | client | Tested | Spec §7.2 was truncated at "Example:" — API shape is my interpretation |
+| Control gating | `ApiContext.controlBlock`, `ActionExecutor.checkControl` | — | refuses `control.*` actions (also re-checked when delayed/sequenced steps run) | — | client | Tested (core) | Platform decides when to block |
 | Events | `EventBus` | `/events`, `/events/stream` (SSE, `?types=`) | — | declared types only | client | Tested | No WebSocket; nothing publishes game events yet |
 
 ## Minecraft client (neoforge module — all Draft)
@@ -35,6 +36,7 @@ Required artifact (spec §17). Status values: **Tested** = covered by automated 
 | Registries (§7.1, §4.16) | `BuiltInRegistries`, `RegistryAccess` | `registry.list`, `registry.entries` (paged, cached for built-ins) | — | — | LOCAL | Draft | Ids only; no per-entry property serialization |
 | Mods (§7.1) | `ModList`, `IModInfo` | `/mods`, `mods.detail` (deps, registered counts per registry) | — | — | LOCAL | Draft | No config exposure; commands/keybindings/capabilities/events not attributed to mods |
 | Commands | `ClientPacketListener#getCommands` | `commands.known` | — | — | SERVER_SYNCED | Draft | Root names only; no client commands, syntax or arg types |
+| Runtime toggle | `ApiController`, `ClientConfig`, `/herobrine_api` | — | `on` / `off` / `status` | — | LOCAL | Draft | Multiplayer control block uses `hasSingleplayerServer()`; no on-screen indicator yet |
 | Baritone (§6) | `baritone.api.*` via reflection | `baritone.status`, `baritone.path`, `baritone.settings` | `baritone.goto / goto_block / follow_player / follow_entity / explore / mine / cancel / pause / resume / repath / set_setting / command` | — | LOCAL | Draft | Reflection against unverified API names; no failure reason (Baritone only reports it in chat); path cost not exposed; settings read-only except via `set_setting` |
 
 ## Not started (spec reference)

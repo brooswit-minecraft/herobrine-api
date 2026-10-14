@@ -99,6 +99,15 @@ public final class Operations {
         return true;
     }
 
+    /** Game thread only. Cancels every running operation (used when the API is switched off). */
+    public int cancelAll() {
+        int n = 0;
+        for (Op op : ops.values()) {
+            if (op.state == State.RUNNING) { finish(op, State.CANCELLED, null, "API disabled", true); n++; }
+        }
+        return n;
+    }
+
     private void finish(Op op, State s, Object result, String error, boolean cancelTask) {
         if (cancelTask) {
             try { op.task.cancel(); } catch (RuntimeException ignored) {}

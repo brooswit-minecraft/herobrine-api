@@ -21,6 +21,11 @@ public final class ApiContext {
     public volatile LongSupplier observedTick = () -> -1;
     public volatile BooleanSupplier serverCompanion = () -> false;
     public volatile String platform = "unknown";
+    /**
+     * Returns a human-readable reason while control actions ("control.*" permissions) must be refused,
+     * or null when they are allowed. Evaluated on the game thread every time a control action runs.
+     */
+    public volatile Supplier<String> controlBlock = () -> null;
 
     private final Map<String, BooleanSupplier> capabilityFlags = new ConcurrentHashMap<>();
     private final Map<String, BooleanSupplier> integrations = new ConcurrentHashMap<>();

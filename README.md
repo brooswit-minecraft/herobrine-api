@@ -7,8 +7,11 @@ Minecraft Universal API mod: an HTTP API embedded in the Minecraft client (NeoFo
 - `docs/COVERAGE.md` — what is implemented vs. the spec
 
 ## Usage
-The mod listens on `127.0.0.1:25580` (override `-Dherobrine.api.port=`). A fresh admin token is written to
-`config/herobrine_api.token` on every start. Create scoped tokens via `POST /api/v1/admin/tokens`
+The API is **on by default** and listens on `127.0.0.1:25580` (`port` in `config/herobrine_api-client.toml`).
+Toggle it in-game with `/herobrine_api on|off|status`; `off` stops the server, cancels running operations and
+deletes the token file. While connected to a multiplayer server, **control actions are refused** unless
+`allowControlOnMultiplayer = true` in the config (read-only endpoints still work). A fresh admin token is
+written to `config/herobrine_api.token` (owner-only permissions) each time the server starts. Create scoped tokens via `POST /api/v1/admin/tokens`
 (`{"name":"agent","permissions":["read.*","control.input"]}`) and revoke them with `DELETE /api/v1/admin/tokens/{id}`.
 
 ```
