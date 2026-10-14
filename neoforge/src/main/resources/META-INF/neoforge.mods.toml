@@ -21,3 +21,10 @@ type = "required"
 versionRange = "[1.21.1,1.22)"
 ordering = "NONE"
 side = "CLIENT"
+
+[[dependencies.herobrine_api]]
+modId = "baritone"
+type = "optional"
+versionRange = "[0,)"
+ordering = "AFTER"
+side = "CLIENT"

@@ -11,7 +11,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.level.Level;
-import net.neoforged.fml.ModList;
 
 /**
  * Initial resource/action set. This is a seed, not the full inventory in the design doc:
@@ -21,14 +20,14 @@ final class ClientBindings {
     private ClientBindings() {}
 
     static void register(ApiContext ctx) {
-        ctx.mods = () -> {
-            List<Map<String, String>> mods = new ArrayList<>();
-            ModList.get().getMods().forEach(m -> mods.add(Map.of("id", m.getModId(), "version", m.getVersion().toString())));
-            return mods;
+        ctx.observedTick = () -> {
+            Level l = Minecraft.getInstance().level;
+            return l == null ? -1 : l.getGameTime();
         };
-        ctx.capabilities = () -> Map.of(
-                "baritone", ModList.get().isLoaded("baritone"),
-                "serverCompanion", false);
+        ctx.capability("world.loadedChunks", () -> Minecraft.getInstance().level != null);
+        ctx.capability("world.unloadedChunks", () -> false);   // server-only without a companion
+        ctx.capability("entities.serverAI", () -> false);      // server-only without a companion
+        ctx.capability("player.input", () -> Minecraft.getInstance().player != null);
 
         ctx.resources.register("client.info", new ResourceDef("client.info", "Game version, window and connection basics",
                 Availability.LOCAL, q -> {
@@ -46,7 +45,7 @@ final class ClientBindings {
                 }));
 
         ctx.resources.register("player.local", new ResourceDef("player.local", "Local player position, vitals and movement state",
-                Availability.SERVER_SYNCED, q -> {
+                Availability.SERVER_SYNCED, "read.players", q -> {
                     LocalPlayer p = requirePlayer();
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("name", p.getGameProfile().getName());
@@ -67,7 +66,7 @@ final class ClientBindings {
                 }));
 
         ctx.resources.register("world.info", new ResourceDef("world.info", "Dimension, time and weather as known to the client",
-                Availability.SERVER_SYNCED, q -> {
+                Availability.SERVER_SYNCED, "read.world", q -> {
                     Level l = Minecraft.getInstance().level;
                     if (l == null) throw ApiException.unavailable("Not in a world");
                     Map<String, Object> m = new LinkedHashMap<>();
@@ -81,11 +80,13 @@ final class ClientBindings {
                     return m;
                 }));
 
+        // registry.list is superseded by registry.entries in ModBindings but kept for names-only discovery.
         ctx.resources.register("registry.list", new ResourceDef("registry.list", "Names of all built-in registries",
                 Availability.LOCAL, q -> BuiltInRegistries.REGISTRY.keySet().stream().map(Object::toString).sorted().toList()));
 
         ctx.actions.register("chat.send", ActionDef.builder("chat.send", "Send a chat message, or a command if it starts with '/'")
                 .param(ParamDef.required("message", "string", "Text to send"))
+                .permission("control.chat")
                 .availability(Availability.CLIENT_REQUEST)
                 .handler(p -> {
                     LocalPlayer pl = requirePlayer();
@@ -98,6 +99,7 @@ final class ClientBindings {
         ctx.actions.register("player.look", ActionDef.builder("player.look", "Set the player's view angles")
                 .param(ParamDef.optional("yaw", "number", "Yaw in degrees", null))
                 .param(ParamDef.optional("pitch", "number", "Pitch in degrees (-90..90)", null))
+                .lock("player.rotation")
                 .handler(p -> {
                     LocalPlayer pl = requirePlayer();
                     if (p.has("yaw")) pl.setYRot((float) p.number("yaw"));
@@ -109,6 +111,8 @@ final class ClientBindings {
                         "Hold a key mapping (e.g. key.forward, key.jump, key.attack) for N ticks; returns a cancellable operation")
                 .param(ParamDef.required("key", "string", "Key mapping name, e.g. key.jump"))
                 .param(ParamDef.optional("ticks", "integer", "Duration in ticks", 1))
+                .permission("control.input")
+                .lock("player.input")
                 .handler(p -> {
                     requirePlayer();
                     KeyMapping km = findKey(p.string("key"));

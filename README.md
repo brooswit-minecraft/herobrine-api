@@ -7,10 +7,23 @@ Minecraft Universal API mod: an HTTP API embedded in the Minecraft client (NeoFo
 - `docs/COVERAGE.md` — what is implemented vs. the spec
 
 ## Usage
-The mod listens on `127.0.0.1:25580` (override `-Dherobrine.api.port=`). The bearer token is written to
-`config/herobrine_api.token`.
+The mod listens on `127.0.0.1:25580` (override `-Dherobrine.api.port=`). A fresh admin token is written to
+`config/herobrine_api.token` on every start. Create scoped tokens via `POST /api/v1/admin/tokens`
+(`{"name":"agent","permissions":["read.*","control.input"]}`) and revoke them with `DELETE /api/v1/admin/tokens/{id}`.
 
 ```
-curl -H "Authorization: Bearer $(cat config/herobrine_api.token)" localhost:25580/api/v1/resources/player.local
-curl -H "Authorization: Bearer …" -d '{"action":"input.hold","parameters":{"key":"key.jump","ticks":5}}' localhost:25580/api/v1/actions/execute
+T=$(cat config/herobrine_api.token); H="Authorization: Bearer $T"
+curl -H "$H" localhost:25580/api/v1/resources/player.local
+curl -H "$H" -d '{"action":"input.hold","parameters":{"key":"key.jump","ticks":5}}' localhost:25580/api/v1/actions/execute
+curl -H "$H" -d '{"action":"baritone.goto","parameters":{"x":100,"z":-40},"timeoutMs":120000}' localhost:25580/api/v1/actions/execute
+curl -H "$H" localhost:25580/api/v1/operations
+curl -H "$H" -d '{"mode":"sequential","actions":[{"action":"player.look","parameters":{"yaw":90}},{"action":"chat.send","parameters":{"message":"hi"},"delayTicks":20}]}' localhost:25580/api/v1/actions/batch
 ```
+
+Every action returns `{"success":…, "action":…, "stage":…, "result":…}` or `{"success":false,"error":{"code","message"}}`.
+Long-running actions return an `operationId`; poll `/operations/{id}` or `POST /operations/{id}/cancel`.
+Actions that share a lock (e.g. `player.movement`) cannot be driven by two tokens at once.
+
+## Extending from another mod
+Subscribe to `RegisterApiEvent` on `NeoForge.EVENT_BUS` and call `event.install(provider)` with a
+`ResourceProvider`; everything it registers is namespaced `yourmodid.*`.

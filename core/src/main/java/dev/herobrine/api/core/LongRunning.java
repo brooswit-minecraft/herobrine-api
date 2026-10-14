@@ -6,4 +6,7 @@ public interface LongRunning {
     Object tick();
 
     default void cancel() {}
+
+    /** Optional progress snapshot included in operation status. */
+    default Object progress() { return null; }
 }
