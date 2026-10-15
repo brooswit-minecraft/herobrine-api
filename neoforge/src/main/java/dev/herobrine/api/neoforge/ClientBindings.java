@@ -1,7 +1,6 @@
 package dev.herobrine.api.neoforge;
 
 import dev.herobrine.api.core.*;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;

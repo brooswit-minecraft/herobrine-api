@@ -23,7 +23,7 @@ The only state the API keeps is the two token hashes, SSE subscriber queues, and
 | Input validation | `Validation` | — | chat text, command allowlist, ids, schematic names, box volume | — | client | Tested | — |
 | Provider SPI | `ResourceProvider`, `ApiRegistrar` | namespaced `modid.*` | `modid.*` | — | client | Tested | — |
 | Event stream | `EventBus` | `/events`, `/events/stream` (SSE, `?types=`) | — | declared types | client | Tested | No WebSocket; few producers (see Baritone) |
-| Baritone adapter | `BaritoneAdapter`, `ReflectiveBaritone` | — | typed process/builder calls | path events | client | Tested against fakes of the API | API names/signatures from memory, unverified against a real build |
+| Baritone adapter | `BaritoneAdapter`, `ReflectiveBaritone` | — | typed process / builder / settings / waypoint calls | path events | client | Tested against fakes of the API | Names/signatures from memory, unverified against a real build; no command-manager fallback |
 
 ## Minecraft client (neoforge module — all Draft)
 
@@ -38,28 +38,32 @@ The only state the API keeps is the two token hashes, SSE subscriber queues, and
 | Mods | `ModList`, `IModInfo` | `/mods`, `mods.detail` | — | — | LOCAL | Draft | No config; commands/keybindings not attributed to mods |
 | Commands | `ClientPacketListener#getCommands` | `commands.known` | — | — | SERVER_SYNCED | Draft | Root names only |
 | Runtime toggle | `ApiController`, `ClientConfig`, `/herobrine_api` | — | `on` / `off` / `status` / `regenerate` | — | LOCAL | Draft | Multiplayer detection uses `hasSingleplayerServer()`; no on-screen indicator |
-| Baritone | typed API via adapter; command manager only as fallback | `baritone.status`, `baritone.path`, `baritone.settings`, `baritone.waypoints`, `baritone.find`, `baritone.schematics` (names only) | see table below | `baritone.path_event` | LOCAL | Draft | Unverified signatures; `sel`/`wp`/`tunnel`… syntax from memory; path cost not exposed; no cylinders |
+| Baritone | typed API only, via `BaritoneAdapter` (command manager never used) | `baritone.status`, `baritone.path`, `baritone.settings`, `baritone.waypoints`, `baritone.find`, `baritone.schematics` (names only) | see table below | `baritone.path_event` | LOCAL | Draft | Every API name/signature is from memory and unverified; a missing call returns 501; path cost not exposed; no cylinders |
 
-### Baritone: which path each action takes
-Typed API first; if the installed build lacks the call the adapter reports `UNSUPPORTED` and the binding falls back
-to the command in the last column. Actions return immediately; `baritone.cancel` stops a running task.
+### Baritone: typed API call behind each action (all from memory, unverified)
+Actions return immediately; `baritone.cancel` stops a running task. A call the installed build lacks fails with 501.
 
-| Action | Typed API call (from memory) | Fallback / command-only |
-|---|---|---|
-| `goto`, `goto_block` | `ICustomGoalProcess.setGoalAndPath(GoalBlock/GoalXZ)`, `IGetToBlockProcess.getToBlock` | `goto …` |
-| `follow_player`, `follow_entity` | `IFollowProcess.follow(Predicate)` | `follow player/entity …` |
-| `explore`, `mine` (quantity), `farm` | `IExploreProcess.explore`, `IMineProcess.mineByName`, `IFarmProcess.farm` | `explore …`, `mine [n] …`, `farm [n]` |
-| `cancel` | `IPathingBehavior.cancelEverything` | `cancel` |
-| `build` | `IBuilderProcess.build(name, file, origin)` | `build name x y z` |
-| `clear_area` | `IBuilderProcess.clearArea` | `sel pos1/pos2/cleararea` |
-| `fill` (solid/walls/shell/sphere/hollow_sphere), `replace`, `clear_selection`, `copy_area`, `paste` | — (schematic classes too version-dependent) | `sel …` only; boxes capped by `maxEditVolume` |
-| `pause`, `resume`, `repath`, `set_setting`, `tunnel`, `thisway`, `axis`, `surface`, `blacklist`, `set_goal_path`, `waypoint_save`, `waypoint_goto` | — | command only |
-| `command` | — | allowlisted escape hatch |
-| resource `baritone.find` | `getWorldProvider().getCurrentWorld().getCachedWorld().getLocationsOf(...)` | none |
-| resource `baritone.waypoints` | `getWaypoints().getAllWaypoints()` | none |
+| Action | Baritone API call |
+|---|---|
+| `goto` | `ICustomGoalProcess.setGoalAndPath(GoalBlock / GoalXZ)` |
+| `goto_block` | `IGetToBlockProcess.getToBlock(BlockOptionalMeta)` |
+| `thisway` | goal computed from your facing, then `setGoalAndPath(GoalXZ)` |
+| `follow_player`, `follow_entity` | `IFollowProcess.follow(Predicate<Entity>)` |
+| `explore`, `mine` (quantity), `farm` | `IExploreProcess.explore`, `IMineProcess.mineByName`, `IFarmProcess.farm` |
+| `cancel` | `IPathingBehavior.cancelEverything` |
+| `build` | `IBuilderProcess.build(name, File, origin)` |
+| `clear_area` | `IBuilderProcess.clearArea(pos1, pos2)` |
+| `fill` (solid/walls/shell/sphere/hollow_sphere), `replace` | `IBuilderProcess.build(name, ISchematic, origin)` with `FillSchematic` / `WallsSchematic` / `ShellSchematic` / `SphereSchematic` / `ReplaceSchematic`; boxes capped by `maxEditVolume` |
+| `set_setting` | writes `Settings.Setting.value` (boolean, integer, long, float, double, string) |
+| `waypoint_save` | `IWaypointCollection.addWaypoint(new Waypoint(name, USER, BetterBlockPos))` |
+| `waypoint_goto` | looks the waypoint up, then `setGoalAndPath(GoalBlock)` |
+| resource `baritone.find` | `getWorldProvider().getCurrentWorld().getCachedWorld().getLocationsOf(...)` |
+| resource `baritone.waypoints` | `getWaypoints().getAllWaypoints()` |
 
-Skipped on purpose: `click` (needs a mouse), `explorefilter`/`saveall`/`reloadall`/`repack` (file access), `come`,
-`invert`, `gc`, `render`; Baritone's `schematic` command is not exposed (purpose unclear to me).
+Dropped because Baritone's API offers no call I could use without its command manager: `pause`, `resume`, `repath`,
+`tunnel`, `axis`, `surface`, `blacklist`, selection copy/paste/clear, and a generic command action. Also not
+exposed: `click` (needs a mouse), file commands (`explorefilter`, `saveall`, `reloadall`, `repack`), `come`,
+`invert`, `gc`, `render`, `schematic`.
 
 ## Not started (spec reference)
 - §4.2–4.6, 4.8–4.9: blocks, chunks, block entities, entities, other players, living-entity AI, items/inventories/data components

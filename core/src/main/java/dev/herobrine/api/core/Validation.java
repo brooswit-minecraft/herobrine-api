@@ -1,11 +1,9 @@
 package dev.herobrine.api.core;
 
-import java.util.Set;
 
-/** Input checks for text that ends up in chat or in another mod's command parser. */
+/** Input checks for text that ends up in chat or is handed to another mod. */
 public final class Validation {
     public static final int MAX_CHAT = 256;
-    private static final java.util.regex.Pattern COMMAND_CHARS = java.util.regex.Pattern.compile("[A-Za-z0-9_:.,\\- ]{1,200}");
 
     private Validation() {}
 
@@ -25,15 +23,12 @@ public final class Validation {
         return s;
     }
 
-    /** A command line whose first word must be in {@code allowedVerbs} and whose characters are restricted. */
-    public static String commandLine(String s, Set<String> allowedVerbs) {
-        if (s == null) throw ApiException.badRequest("Missing command");
-        String line = s.trim();
-        if (!COMMAND_CHARS.matcher(line).matches()) throw ApiException.badRequest("Command contains forbidden characters or is too long");
-        String verb = line.split(" ", 2)[0].toLowerCase(java.util.Locale.ROOT);
-        if (!allowedVerbs.contains(verb))
-            throw ApiException.badRequest("Command '" + verb + "' is not allowed; allowed: " + new java.util.TreeSet<>(allowedVerbs));
-        return line;
+    /** A value for a typed setting: 1-200 characters, no control characters. */
+    public static String settingValue(String s) {
+        if (s == null || s.isEmpty() || s.length() > 200) throw ApiException.badRequest("Value must be 1-200 characters");
+        for (int i = 0; i < s.length(); i++)
+            if (s.charAt(i) < 0x20 || s.charAt(i) == 0x7f) throw ApiException.badRequest("Value contains a control character");
+        return s;
     }
 
     private static final java.util.regex.Pattern RESOURCE_ID = java.util.regex.Pattern.compile("[a-z0-9_.\\-]+(:[a-z0-9_./\\-]+)?");

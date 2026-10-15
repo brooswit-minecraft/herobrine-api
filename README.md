@@ -37,10 +37,11 @@ curl -H "$H" -N localhost:25580/api/v1/events/stream?types=baritone.path_event
 - Discovery: `/resources`, `/actions`, `/events`, `/capabilities`, `/mods`, `/schema`, `/openapi.json`.
 - Data the client can't legitimately have is returned as `{"available": false, "reason": "SERVER_ONLY", ...}`, never invented.
 
-Baritone actions call its typed Java API (reflection, optional dependency) and fall back to its command manager
-only for calls the installed build lacks. Path events (`AT_GOAL`, `CALC_FAILED`, `CANCELED`, …) are published on
-the `baritone.path_event` event stream, and `baritone.status` shows the latest. Bulk edits (`fill`, `clear_area`,
-`replace`, `build`) are capped by `maxEditVolume` and read schematics only by bare file name from `<game dir>/schematics`.
+Baritone actions use its typed Java API only (reflection, optional dependency); its command manager is never used.
+If the installed build lacks a call, the action fails with `501 UNSUPPORTED` rather than guessing. Path events
+(`AT_GOAL`, `CALC_FAILED`, `CANCELED`, …) are published on the `baritone.path_event` event stream, and
+`baritone.status` shows the latest. Bulk edits (`fill`, `clear_area`, `replace`) are capped by `maxEditVolume`;
+`build` reads schematics only by bare file name from `<game dir>/schematics`.
 
 ## Extending from another mod
 Subscribe to `RegisterApiEvent` on `NeoForge.EVENT_BUS` and call `event.install(provider)` with a

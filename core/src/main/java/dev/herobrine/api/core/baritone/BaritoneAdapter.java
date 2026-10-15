@@ -8,13 +8,26 @@ import java.util.function.Predicate;
 
 /**
  * Typed facade over Baritone's published Java API (baritone.api.*). Every method throws
- * {@code ApiException} with code {@code UNSUPPORTED} when the installed build lacks the underlying
- * API call, so callers can fall back to Baritone's command manager for that one operation.
+ * {@code ApiException}: {@code UNSUPPORTED} (501) when the installed build lacks the underlying API
+ * call, {@code ACTION_UNAVAILABLE} (409) when Baritone is absent or has no active instance.
+ * Baritone's command manager is deliberately not used.
  */
 public interface BaritoneAdapter {
+    /** Inclusive axis-aligned box between two corners, in any order. */
+    record Box(int x1, int y1, int z1, int x2, int y2, int z2) {
+        public int minX() { return Math.min(x1, x2); }
+        public int minY() { return Math.min(y1, y2); }
+        public int minZ() { return Math.min(z1, z2); }
+        public int sizeX() { return Math.abs(x1 - x2) + 1; }
+        public int sizeY() { return Math.abs(y1 - y2) + 1; }
+        public int sizeZ() { return Math.abs(z1 - z2) + 1; }
+    }
+
+    enum Shape { SOLID, WALLS, SHELL, SPHERE, HOLLOW_SPHERE }
+
     boolean installed();
 
-    // ---- navigation / processes (all start a Baritone process and return immediately) ----
+    // ---- processes (each starts a Baritone process and returns immediately) ----
     void gotoPos(int x, int y, int z);
     void gotoXZ(int x, int z);
     void gotoBlock(String blockId);
@@ -30,7 +43,17 @@ public interface BaritoneAdapter {
     // ---- building ----
     /** Builds a schematic file with its origin at x,y,z. */
     void buildSchematic(File file, int x, int y, int z);
-    void clearArea(int x1, int y1, int z1, int x2, int y2, int z2);
+    void clearArea(Box box);
+    void fill(Shape shape, String blockId, Box box);
+    /** Replaces {@code findId} with {@code replaceId} inside the box. */
+    void replace(String findId, String replaceId, Box box);
+
+    // ---- settings / waypoints ----
+    List<Map<String, Object>> settings();
+    /** Sets a boolean, integer, long, float, double or string setting; the value is parsed to the setting's type. */
+    void setSetting(String name, String value);
+    List<Map<String, Object>> waypoints();
+    void saveWaypoint(String name, int x, int y, int z);
 
     // ---- state ----
     boolean isPathing();
@@ -38,16 +61,10 @@ public interface BaritoneAdapter {
     /** Display name of the process currently in control, or null. */
     String activeProcess();
     List<int[]> pathNodes(int cap);
-    List<Map<String, Object>> settings();
-    /** Known locations of a block in Baritone's world cache near the given center, nearest regions first. */
+    /** Known locations of a block in Baritone's world cache near the given center. */
     List<int[]> locationsOf(String blockId, int max, int centerX, int centerZ);
-    /** Baritone waypoints: name, tag, x, y, z. */
-    List<Map<String, Object>> waypoints();
 
     default boolean busy() { return isPathing() || activeProcess() != null; }
-
-    /** Last-resort access to Baritone's own command manager (the same parser as in-game '#' commands). */
-    void command(String line);
 
     // ---- path events (CALC_FAILED, AT_GOAL, CANCELED, ...) ----
     /** The most recent path event name, or null if none has been seen. */

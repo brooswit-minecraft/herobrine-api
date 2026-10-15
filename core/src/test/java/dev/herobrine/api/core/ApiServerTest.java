@@ -250,13 +250,10 @@ class ApiServerTest {
         assertEquals(256, Validation.chatText("z".repeat(256)).length());
     }
 
-    @Test void commandAllowlist() {
-        java.util.Set<String> allowed = java.util.Set.of("goto", "cancel");
-        assertEquals("goto 1 2 3", Validation.commandLine("  GOTO 1 2 3 ", allowed).toLowerCase());
-        assertThrows(ApiException.class, () -> Validation.commandLine("set allowBreak true", allowed));
-        assertThrows(ApiException.class, () -> Validation.commandLine("goto 1\nset x", allowed));
-        assertThrows(ApiException.class, () -> Validation.commandLine("goto; set x", allowed));
-        assertThrows(ApiException.class, () -> Validation.commandLine("", allowed));
+    @Test void settingValueValidation() {
+        assertEquals("a b-1.5", Validation.settingValue("a b-1.5"));
+        for (String bad : new String[]{"", "a\nb", "a\u0000b", "z".repeat(201)})
+            assertThrows(ApiException.class, () -> Validation.settingValue(bad), bad);
     }
 
     @Test void buildValidation() {

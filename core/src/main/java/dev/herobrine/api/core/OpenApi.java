@@ -59,7 +59,7 @@ public final class OpenApi {
         JsonObject post = new JsonObject();
         post.addProperty("summary", "Execute an action by name (see /api/v1/actions)");
         JsonObject responses = new JsonObject();
-        responses.add("200", described("Action result or operation handle"));
+        responses.add("200", described("Action result"));
         post.add("responses", responses);
         exec.add("post", post);
         paths.add("/api/v1/actions/execute", exec);

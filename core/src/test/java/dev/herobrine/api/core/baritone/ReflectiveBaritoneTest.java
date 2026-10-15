@@ -45,8 +45,8 @@ class ReflectiveBaritoneTest {
 
     @Test void buildingUsesBlockPosFactory() {
         b.buildSchematic(new File("house.schem"), 1, 2, 3);
-        b.clearArea(0, 0, 0, 2, 2, 2);
-        assertEquals("build:house.schem:BlockPos(1,2,3)", FakeBaritone.CALLS.get(0));
+        b.clearArea(new BaritoneAdapter.Box(0, 0, 0, 2, 2, 2));
+        assertEquals("buildFile:house.schem:BlockPos(1,2,3)", FakeBaritone.CALLS.get(0));
         assertEquals("clearArea:BlockPos(0,0,0)->BlockPos(2,2,2)", FakeBaritone.CALLS.get(1));
         ApiException e = assertThrows(ApiException.class, () -> b.buildSchematic(new File("bad.schem"), 0, 0, 0));
         assertEquals("BAD_REQUEST", e.code);
@@ -64,9 +64,6 @@ class ReflectiveBaritoneTest {
         assertEquals("allowBreak", s.get("name"));
         assertEquals("true", s.get("value"));
         assertEquals("false", s.get("default"));
-        b.command("goto 1 2");
-        assertEquals("cmd:goto 1 2", FakeBaritone.CALLS.get(0));
-        assertThrows(ApiException.class, () -> b.command("a\nb"));
     }
 
     @Test void worldCacheAndWaypoints() {
@@ -79,6 +76,44 @@ class ReflectiveBaritoneTest {
         assertEquals("HOME", wp.get("tag"));
         assertEquals(100, wp.get("x"));
         assertEquals(-5, wp.get("z"));
+    }
+
+    @Test void fillAndReplaceBuildInMemorySchematicsAtTheBoxMinimum() {
+        var box = new BaritoneAdapter.Box(5, 10, 5, 3, 8, 7); // corners in any order: min = (3,8,5), size 3x3x3
+        b.fill(BaritoneAdapter.Shape.SOLID, "minecraft:stone", box);
+        b.fill(BaritoneAdapter.Shape.WALLS, "minecraft:stone", box);
+        b.fill(BaritoneAdapter.Shape.HOLLOW_SPHERE, "minecraft:glass", box);
+        b.replace("minecraft:dirt", "minecraft:grass_block", box);
+        assertEquals(List.of(
+                "buildSchematic:fill:Fill(3x3x3,BOM{minecraft:stone}):BlockPos(3,8,5)",
+                "buildSchematic:fill:Walls(Fill(3x3x3,BOM{minecraft:stone})):BlockPos(3,8,5)",
+                "buildSchematic:fill:HollowSphere(Fill(3x3x3,BOM{minecraft:glass})):BlockPos(3,8,5)",
+                "buildSchematic:replace:Replace(Fill(3x3x3,BOM{minecraft:grass_block}) where Lookup[minecraft:dirt]):BlockPos(3,8,5)"),
+                FakeBaritone.CALLS);
+    }
+
+    @Test void settingsAreWrittenWithTheRightType() {
+        b.setSetting("allowBreak", "false");
+        b.setSetting("maxFallHeight", "7");
+        b.setSetting("chatDebug", "hello world");
+        var all = b.settings();
+        assertEquals("false", all.get(0).get("value"));
+        assertEquals("7", all.get(1).get("value"));
+        assertEquals("Integer", all.get(1).get("type"));
+        assertEquals("hello world", all.get(2).get("value"));
+        assertEquals("BAD_REQUEST", assertThrows(ApiException.class, () -> b.setSetting("maxFallHeight", "abc")).code);
+        assertEquals("BAD_REQUEST", assertThrows(ApiException.class, () -> b.setSetting("allowBreak", "yes")).code);
+        assertEquals("NOT_FOUND", assertThrows(ApiException.class, () -> b.setSetting("nope", "1")).code);
+        assertEquals("UNSUPPORTED", assertThrows(ApiException.class, () -> b.setSetting("nullValue", "1")).code);
+        assertEquals("UNSUPPORTED", assertThrows(ApiException.class, () -> b.setSetting("weird", "1")).code);
+    }
+
+    @Test void waypointsCanBeSaved() {
+        b.saveWaypoint("base", 1, 2, 3);
+        var w = FakeBaritone.SAVED.get(0);
+        assertEquals("base", w.getName());
+        assertEquals("USER", w.getTag().name());
+        assertEquals("BBP(1,2,3)", w.getLocation().toString());
     }
 
     @Test void missingApiReportsUnsupportedSoCallersCanFallBack() {
