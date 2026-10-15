@@ -1,10 +1,13 @@
-// UNVERIFIED: written without access to maven.neoforged.net. Build with: gradle -PwithNeoForge :neoforge:build
+// UNVERIFIED until CI has compiled it once (written without access to maven.neoforged.net).
+// Build with: ./gradlew -PwithNeoForge :neoforge:build
 plugins {
     id 'java'
     id 'net.neoforged.moddev' version '2.0.78'
 }
 
 java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
+
+base { archivesName = 'herobrine-api' }
 
 repositories {
     maven { url = 'https://maven-central.storage-download.googleapis.com/maven2' }
