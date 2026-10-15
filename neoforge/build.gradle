@@ -1,5 +1,4 @@
-// UNVERIFIED until CI has compiled it once (written without access to maven.neoforged.net).
-// Build with: ./gradlew -PwithNeoForge :neoforge:build
+// Compiled in CI. Build with: ./gradlew -PwithNeoForge :neoforge:build
 plugins {
     id 'java'
     id 'net.neoforged.moddev' version '2.0.78'
@@ -15,7 +14,7 @@ repositories {
 }
 
 neoForge {
-    version = '21.1.172' // verify the latest 21.1.x at https://projects.neoforged.net/neoforged/neoforge
+    version = '21.1.172'
     runs {
         client { client() }
     }

@@ -5,13 +5,12 @@ The design goal is **as close to 1-to-1 with the game as possible**: reads retur
 now, actions do the thing and return what it returned. The API keeps no operation, queue, lock or session state.
 
 - `core/` — platform-independent server, registries, Baritone adapter. `./gradlew :core:test`
-- `neoforge/` — Minecraft bindings (opt-in: `./gradlew -PwithNeoForge :neoforge:build`; **never compiled or run in a real client yet**)
+- `neoforge/` — Minecraft bindings (opt-in: `./gradlew -PwithNeoForge :neoforge:build`; compiles in CI against NeoForge 21.1.172 but **has never been run in a real client**)
 - `docs/COVERAGE.md` — what is implemented vs. the spec
 
 ## CI
 `.github/workflows/ci.yml` runs the `core` tests and the NeoForge build on every PR and push to `main`. Publishing a GitHub release
-(`release.yml`) rebuilds and attaches `herobrine-api-*.jar` to it. The NeoForge job is the first real compile of `neoforge/`,
-so expect it to need signature fixes.
+(`release.yml`) rebuilds and attaches `herobrine-api-*.jar` to it.
 
 ## Usage
 The API is **on by default** and listens on `127.0.0.1:25580` (`port` in `config/herobrine_api-client.toml`).

@@ -1,8 +1,8 @@
 # Coverage matrix
 
-Required artifact (spec §17). Status: **Tested** = automated tests in `core`; **Draft** = written but never
-compiled or run (the build environment could not reach maven.neoforged.net; the `neoforge/` sources were only
-syntax-checked with `javac`). Update with every change.
+Required artifact (spec §17). Status: **Tested** = automated tests in `core`; **Draft** = compiles in CI against
+NeoForge 21.1.172 (Minecraft/NeoForge signatures are verified by the compiler) but has never been run in a real client;
+Baritone calls are reflective, so the compiler does not check them. Update with every change.
 
 Design rule: 1-to-1 with the game. No operations, queues, locks, batches or delays; actions return immediately.
 The only state the API keeps is the two token hashes, SSE subscriber queues, and the set of keys it is holding.
@@ -75,6 +75,6 @@ exposed: `click` (needs a mouse), file commands (`explorefilter`, `saveall`, `re
 - The systematic Minecraft/NeoForge class audit (needs decompiled sources)
 
 ## Known open questions
-- NeoForge 1.21.1 / Mojang-mapped signatures in `neoforge/` are from memory and must be verified by compiling; the pinned NeoForge version is a guess.
+- Everything in `neoforge/` is unproven at runtime: only compilation is verified.
 - Whether `jdk.httpserver` is available on NeoForge's module path (reviewer concern; test in a real client).
 - Whether Baritone's classes are visible from this mod's classloader.
