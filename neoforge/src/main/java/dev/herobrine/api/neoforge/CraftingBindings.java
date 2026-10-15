@@ -5,7 +5,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.client.multiplayer.MultiPlayerGameMode;
 import net.minecraft.client.player.LocalPlayer;
@@ -62,8 +61,8 @@ final class CraftingBindings {
                 .param(ParamDef.optional("containerId", "integer", "Menu id from container.open; refused if a different menu is open", null))
                 .handler(p -> {
                     LocalPlayer player = Game.player();
-                    MultiPlayerGameMode gameMode = gameMode();
-                    AbstractContainerMenu menu = menuGuard(player, p);
+                    MultiPlayerGameMode gameMode = Game.gameMode();
+                    AbstractContainerMenu menu = Game.menu(p);
                     if (!(menu instanceof RecipeBookMenu<?, ?>)) throw ApiException.unavailable("The open menu has no crafting grid");
                     ResourceLocation id = ResourceLocation.tryParse(p.string("recipe"));
                     if (id == null) throw ApiException.badRequest("Invalid recipe id");
@@ -79,7 +78,7 @@ final class CraftingBindings {
                 .param(ParamDef.optional("all", "boolean", "Shift-click the result slot", true))
                 .param(ParamDef.optional("containerId", "integer", "Menu id from container.open; refused if a different menu is open", null))
                 .handler(p -> {
-                    AbstractContainerMenu menu = menuGuard(Game.player(), p);
+                    AbstractContainerMenu menu = Game.menu(p);
                     if (!(menu instanceof RecipeBookMenu<?, ?> book)) throw ApiException.unavailable("The open menu has no crafting grid");
                     return InventoryBindings.click(p, book.getResultSlotIndex(), 0,
                             p.bool("all", true) ? ClickType.QUICK_MOVE : ClickType.PICKUP);
@@ -124,17 +123,4 @@ final class CraftingBindings {
     }
 
     private static String itemId(ItemStack s) { return BuiltInRegistries.ITEM.getKey(s.getItem()).toString(); }
-
-    private static MultiPlayerGameMode gameMode() {
-        MultiPlayerGameMode gm = Minecraft.getInstance().gameMode;
-        if (gm == null) throw ApiException.unavailable("Not connected to a game");
-        return gm;
-    }
-
-    private static AbstractContainerMenu menuGuard(LocalPlayer player, Params p) {
-        AbstractContainerMenu menu = player.containerMenu;
-        if (p.has("containerId") && p.integer("containerId") != menu.containerId)
-            throw ApiException.unavailable("The open container changed (it is now " + menu.containerId + "); read container.open again");
-        return menu;
-    }
 }

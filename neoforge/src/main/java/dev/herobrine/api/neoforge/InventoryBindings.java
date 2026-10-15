@@ -7,7 +7,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.multiplayer.MultiPlayerGameMode;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -48,7 +47,7 @@ final class InventoryBindings {
                 });
 
         read(ctx, "container.open",
-                "The menu you have open (chest, furnace, your own inventory screen, ...): its non-empty slots with their GUI positions, the carried stack, and the crafting grid layout (result slot, size) if it has one",
+                "The menu you have open (chest, furnace, your own inventory screen, ...): its non-empty slots with their GUI positions, the carried stack, the crafting grid layout if it has one, and `station` state for furnaces, brewing stands, enchanting tables, anvils, stonecutters, looms, beacons and villager trades",
                 q -> {
                     LocalPlayer p = Game.player();
                     HolderLookup.Provider registries = p.level().registryAccess();
@@ -71,6 +70,7 @@ final class InventoryBindings {
                     m.put("slots", slots);
                     m.put("carried", describe(menu.getCarried(), registries));
                     m.put("crafting", CraftingBindings.gridInfo(menu));
+                    m.put("station", StationBindings.describe(menu, p.level().registryAccess()));
                     return m;
                 });
     }
@@ -133,14 +133,10 @@ final class InventoryBindings {
     /** Sends one container click. The server's response arrives on later ticks: read container.open afterwards. */
     static Object click(Params p, int slot, int button, ClickType type) {
         LocalPlayer player = Game.player();
-        MultiPlayerGameMode gameMode = Minecraft.getInstance().gameMode;
-        if (gameMode == null) throw ApiException.unavailable("Not connected to a game");
-        AbstractContainerMenu menu = player.containerMenu;
-        if (p.has("containerId") && p.integer("containerId") != menu.containerId)
-            throw ApiException.unavailable("The open container changed (it is now " + menu.containerId + "); read container.open again");
+        AbstractContainerMenu menu = Game.menu(p);
         if (slot != -999 && (slot < 0 || slot >= menu.slots.size()))
             throw ApiException.badRequest("slot must be -999 or between 0 and " + (menu.slots.size() - 1));
-        gameMode.handleInventoryMouseClick(menu.containerId, slot, button, type, player);
+        Game.gameMode().handleInventoryMouseClick(menu.containerId, slot, button, type, player);
         return Map.of("containerId", menu.containerId, "slot", slot, "button", button, "type", type.name());
     }
 
@@ -161,7 +157,7 @@ final class InventoryBindings {
         return m;
     }
 
-    private static String menuType(AbstractContainerMenu menu) {
+    static String menuType(AbstractContainerMenu menu) {
         try {
             return BuiltInRegistries.MENU.getKey(menu.getType()).toString();
         } catch (UnsupportedOperationException e) {
