@@ -45,7 +45,7 @@ final class ClientBindings {
 
         ctx.resources.register("player.local", new ResourceDef("player.local", "Local player position, vitals and movement state",
                 Availability.SERVER_SYNCED, q -> {
-                    LocalPlayer p = requirePlayer();
+                    LocalPlayer p = Game.player();
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("name", p.getGameProfile().getName());
                     m.put("uuid", p.getUUID().toString());
@@ -88,7 +88,7 @@ final class ClientBindings {
                 .param(ParamDef.required("message", "string", "Text to send"))
                 .availability(Availability.CLIENT_REQUEST)
                 .handler(p -> {
-                    LocalPlayer pl = requirePlayer();
+                    LocalPlayer pl = Game.player();
                     pl.connection.sendChat(Validation.chatText(p.string("message")));
                     return Map.of("sent", true);
                 }));
@@ -98,7 +98,7 @@ final class ClientBindings {
                 .param(ParamDef.required("command", "string", "Command text, e.g. 'time set day'"))
                 .availability(Availability.CLIENT_REQUEST)
                 .handler(p -> {
-                    LocalPlayer pl = requirePlayer();
+                    LocalPlayer pl = Game.player();
                     pl.connection.sendCommand(Validation.chatText(p.string("command")));
                     return Map.of("sent", true);
                 }));
@@ -107,7 +107,7 @@ final class ClientBindings {
                 .param(ParamDef.optional("yaw", "number", "Yaw in degrees", null))
                 .param(ParamDef.optional("pitch", "number", "Pitch in degrees (-90..90)", null))
                 .handler(p -> {
-                    LocalPlayer pl = requirePlayer();
+                    LocalPlayer pl = Game.player();
                     if (p.has("yaw")) pl.setYRot((float) p.number("yaw"));
                     if (p.has("pitch")) pl.setXRot((float) Math.max(-90, Math.min(90, p.number("pitch"))));
                     return Map.of("yaw", pl.getYRot(), "pitch", pl.getXRot());
@@ -119,7 +119,7 @@ final class ClientBindings {
                 .param(ParamDef.required("key", "string", "Key mapping name, e.g. key.jump"))
                 .param(ParamDef.required("down", "boolean", "true to press, false to release"))
                 .handler(p -> {
-                    requirePlayer();
+                    Game.player();
                     KeyMapping km = findKey(p.string("key"));
                     boolean down = p.bool("down", true);
                     km.setDown(down);
@@ -131,7 +131,7 @@ final class ClientBindings {
                         "One click/tap of a key mapping (KeyMapping.click): use for attack, use-item, hotbar, drop, inventory")
                 .param(ParamDef.required("key", "string", "Key mapping name, e.g. key.attack"))
                 .handler(p -> {
-                    requirePlayer();
+                    Game.player();
                     KeyMapping km = findKey(p.string("key"));
                     KeyMapping.click(km.getKey());
                     return Map.of("key", km.getName(), "clicked", true);
@@ -145,12 +145,6 @@ final class ClientBindings {
     static void releaseAllKeys() {
         for (KeyMapping km : HELD) km.setDown(false);
         HELD.clear();
-    }
-
-    private static LocalPlayer requirePlayer() {
-        LocalPlayer p = Minecraft.getInstance().player;
-        if (p == null) throw ApiException.unavailable("No local player (not in a world)");
-        return p;
     }
 
     private static KeyMapping findKey(String name) {

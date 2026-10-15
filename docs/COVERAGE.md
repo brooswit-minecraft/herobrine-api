@@ -31,9 +31,13 @@ The only state the API keeps is the two token hashes, SSE subscriber queues, and
 |---|---|---|---|---|---|---|---|
 | Client runtime | `Minecraft`, `Window`, `SharedConstants` | `client.info` | — | — | LOCAL | Draft | Subset of §4.1 |
 | Local player | `LocalPlayer` | `player.local` | `player.look` | — | SERVER_SYNCED | Draft | Subset of §4.7; no inventory/effects/abilities; look snaps instantly |
-| World | `Level` | `world.info` | — | — | SERVER_SYNCED | Draft | No gamerules/border/biome/weather detail |
+| World info | `Level` | `world.info` | — | — | SERVER_SYNCED | Draft | No gamerules/border/weather detail |
+| World | `ClientLevel`, `BlockState`, `LevelChunk` | `world.block` (state, properties, light, fluid, biome), `world.blocks` (box scan: palette + index array, -1 = not loaded), `world.chunks` (loaded chunk coords), `world.block_entities` (type + synced SNBT) | — | — | SERVER_SYNCED | Draft | Scans capped by `maxScanVolume`; unloaded chunks reported as not loaded; client holds no data for chunks the server never sent |
+| Entities | `ClientLevel#entitiesForRendering`, `LivingEntity` | `entities` (nearby, by radius/type), `entity` (detail: bounding box, tags, team, effects, equipment), `players` (tab list + tracked position) | — | — | SERVER_SYNCED | Draft | Only what the server syncs to the client; other players' inventories/stats are never available; no AI/brain data (server-only) |
+| Inventory | `Inventory`, `AbstractContainerMenu`, `ItemStack.CODEC` | `player.inventory` (all non-empty slots + carried), `container.open` (open menu slots with GUI positions) | — | — | SERVER_SYNCED | Draft | Stacks include full SNBT (data components). Container contents only exist client-side while the menu is open |
+| Chat | `ClientChatReceivedEvent` | `chat.history` (last 500 received, `after` cursor) | — | `chat.message` | SERVER_SYNCED | Draft | Minecraft keeps chat lines private, so this buffers what it receives after the mod loads (the only chat state kept) |
 | Input | `KeyMapping` | `input.keybindings` | `input.key` (setDown), `input.click` (KeyMapping.click) | — | LOCAL | Draft | No mouse/cursor/raw key events; keys held by the API are released on stop |
-| Chat | `ClientPacketListener`, `Validation` | — | `chat.send` (plain text ≤256), `chat.command` (no leading `/`) | — | CLIENT_REQUEST | Draft | No chat history/events; no cooldown |
+| Chat (send) | `ClientPacketListener`, `Validation` | — | `chat.send` (plain text ≤256), `chat.command` (no leading `/`) | — | CLIENT_REQUEST | Draft | no cooldown |
 | Registries | `BuiltInRegistries`, `RegistryAccess` | `registry.list`, `registry.entries` (paged; cached for built-ins) | — | — | LOCAL | Draft | Ids only; no per-entry properties |
 | Mods | `ModList`, `IModInfo` | `/mods`, `mods.detail` | — | — | LOCAL | Draft | No config; commands/keybindings not attributed to mods |
 | Commands | `ClientPacketListener#getCommands` | `commands.known` | — | — | SERVER_SYNCED | Draft | Root names only |
@@ -66,8 +70,8 @@ exposed: `click` (needs a mouse), file commands (`explorefilter`, `saveall`, `re
 `invert`, `gc`, `render`, `schematic`.
 
 ## Not started (spec reference)
-- §4.2–4.6, 4.8–4.9: blocks, chunks, block entities, entities, other players, living-entity AI, items/inventories/data components
-- §4.10, 4.12, 4.13, 4.15: GUI/widgets, camera/raycast/screenshots, networking diagnostics, sound/particles
+- §4.8: living-entity AI (server-only); item/recipe definitions beyond what a stack carries
+- §4.10, 4.12, 4.13, 4.15: GUI widgets, camera/raycast/screenshots, networking diagnostics, sound/particles, scoreboard
 - §5: interaction, inventory ops, GUI actions, client settings, multiplayer connect/disconnect
 - WebSocket and game-event producers (SSE transport exists)
 - Generic object inspection, NBT/data-component serialization, spatial queries

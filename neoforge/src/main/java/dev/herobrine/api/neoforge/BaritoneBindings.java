@@ -14,7 +14,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
-import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -80,8 +79,8 @@ final class BaritoneBindings {
                 "Known locations of a block type in Baritone's world cache, nearest regions to you first. Params: block (required), limit (default 100, max 1000)",
                 q -> {
                     String id = Validation.resourceId(q.string("block"));
-                    int limit = inRange(q.integer("limit", 100), 1, 1000, "limit");
-                    LocalPlayer pl = requirePlayer();
+                    int limit = Game.inRange(q.integer("limit", 100), 1, 1000, "limit");
+                    LocalPlayer pl = Game.player();
                     List<int[]> found = A.locationsOf(id, limit, (int) Math.floor(pl.getX()), (int) Math.floor(pl.getZ()));
                     return Map.of("block", id, "count", found.size(), "locations", found);
                 });
@@ -119,8 +118,8 @@ final class BaritoneBindings {
         action(ctx, "baritone.thisway", "Walk N blocks in the direction you are facing", b -> b
                 .param(ParamDef.required("distance", "integer", "Blocks to travel (1..10000)")),
                 p -> {
-                    int d = inRange(p.integer("distance"), 1, 10_000, "distance");
-                    LocalPlayer pl = requirePlayer();
+                    int d = Game.inRange(p.integer("distance"), 1, 10_000, "distance");
+                    LocalPlayer pl = Game.player();
                     double yaw = Math.toRadians(pl.getYRot());
                     int x = (int) Math.floor(pl.getX() - Math.sin(yaw) * d);
                     int z = (int) Math.floor(pl.getZ() + Math.cos(yaw) * d);
@@ -145,7 +144,7 @@ final class BaritoneBindings {
                 .param(ParamDef.optional("z", "integer", "Origin Z", null)),
                 p -> {
                     if (p.has("x") != p.has("z")) throw ApiException.badRequest("Give both x and z, or neither");
-                    LocalPlayer pl = requirePlayer();
+                    LocalPlayer pl = Game.player();
                     int x = p.has("x") ? p.integer("x") : (int) Math.floor(pl.getX());
                     int z = p.has("z") ? p.integer("z") : (int) Math.floor(pl.getZ());
                     return () -> A.explore(x, z);
@@ -156,13 +155,13 @@ final class BaritoneBindings {
                 p -> {
                     List<String> ids = new ArrayList<>();
                     for (String s : p.string("blocks").trim().split("\\s+")) ids.add(Validation.resourceId(s));
-                    int quantity = inRange(p.integer("quantity", 0), 0, 100_000, "quantity");
+                    int quantity = Game.inRange(p.integer("quantity", 0), 0, 100_000, "quantity");
                     return () -> A.mine(ids, quantity);
                 });
         action(ctx, "baritone.farm", "Harvest and replant nearby crops", b -> b
                 .param(ParamDef.optional("range", "integer", "Farming radius; 0 = Baritone's default", 0)),
                 p -> {
-                    int range = inRange(p.integer("range", 0), 0, 256, "range");
+                    int range = Game.inRange(p.integer("range", 0), 0, 256, "range");
                     return () -> A.farm(range);
                 });
         action(ctx, "baritone.cancel", "Cancel whatever Baritone is doing", b -> b, p -> A::cancel);
@@ -210,7 +209,7 @@ final class BaritoneBindings {
                     int given = (p.has("x") ? 1 : 0) + (p.has("y") ? 1 : 0) + (p.has("z") ? 1 : 0);
                     if (given != 0 && given != 3) throw ApiException.badRequest("Give all of x, y, z or none");
                     BlockPos origin = given == 3 ? new BlockPos(p.integer("x"), p.integer("y"), p.integer("z"))
-                                                 : requirePlayer().blockPosition();
+                                                 : Game.player().blockPosition();
                     return () -> A.buildSchematic(file.toFile(), origin.getX(), origin.getY(), origin.getZ());
                 });
     }
@@ -243,7 +242,7 @@ final class BaritoneBindings {
                 .param(ParamDef.required("name", "string", "Waypoint name (letters, digits, _ and -)")),
                 p -> {
                     String name = matching(p.string("name"), WAYPOINT_NAME, "waypoint name");
-                    BlockPos pos = requirePlayer().blockPosition();
+                    BlockPos pos = Game.player().blockPosition();
                     return () -> A.saveWaypoint(name, pos.getX(), pos.getY(), pos.getZ());
                 });
         action(ctx, "baritone.waypoint_goto", "Pathfind to a saved Baritone waypoint", b -> b
@@ -269,27 +268,16 @@ final class BaritoneBindings {
     /** Registers an action that validates, starts the Baritone call, and returns immediately. */
     private static void action(ApiContext ctx, String name, String desc, Customizer c, Starter starter) {
         ctx.actions.register(name, c.apply(ActionDef.builder(name, desc)).handler(p -> {
-            requirePlayer();
+            Game.player();
             Runnable go = starter.prepare(p);
             go.run();
             return Map.of("started", name);
         }));
     }
 
-    private static LocalPlayer requirePlayer() {
-        LocalPlayer p = Minecraft.getInstance().player;
-        if (p == null) throw ApiException.unavailable("Player is not connected to a world");
-        return p;
-    }
-
     private static String matching(String s, String regex, String what) {
         if (!s.matches(regex)) throw ApiException.badRequest("Invalid " + what + ": " + s);
         return s;
-    }
-
-    private static int inRange(int v, int min, int max, String name) {
-        if (v < min || v > max) throw ApiException.badRequest("'" + name + "' must be between " + min + " and " + max);
-        return v;
     }
 
     private static Path schematicsDir() { return FMLPaths.GAMEDIR.get().resolve("schematics"); }

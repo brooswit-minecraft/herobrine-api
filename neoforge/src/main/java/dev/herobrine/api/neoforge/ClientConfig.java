@@ -11,6 +11,7 @@ final class ClientConfig {
     static final ModConfigSpec.IntValue PORT;
     static final ModConfigSpec.BooleanValue ALLOW_CONTROL_ON_MULTIPLAYER;
     static final ModConfigSpec.IntValue MAX_EDIT_VOLUME;
+    static final ModConfigSpec.IntValue MAX_SCAN_VOLUME;
 
     static {
         ModConfigSpec.Builder b = new ModConfigSpec.Builder();
@@ -25,6 +26,8 @@ final class ClientConfig {
                 .define("allowControlOnMultiplayer", false);
         MAX_EDIT_VOLUME = b.comment("Largest box (in blocks) that baritone.fill / clear_area / replace will accept.")
                 .defineInRange("maxEditVolume", 100_000, 1, 10_000_000);
+        MAX_SCAN_VOLUME = b.comment("Largest box (in blocks) that world.blocks / world.block_entities will scan in one request.")
+                .defineInRange("maxScanVolume", 32_768, 1, 1_000_000);
         SPEC = b.build();
     }
 }

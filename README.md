@@ -38,6 +38,7 @@ curl -H "$H" -N localhost:25580/api/v1/events/stream?types=baritone.path_event
   `{success:false, error:{code, message}}`. Actions return immediately. Anything that takes time (Baritone pathing,
   held keys) is started by one call, observed through resources/events, and stopped by another call
   (`baritone.cancel`, `input.key` with `down:false`).
+- Game state: blocks and block entities (`world.block`, `world.blocks`, `world.block_entities`), loaded chunks, nearby entities and players, your inventory and the open container, and chat history; `GET /api/v1/resources` lists everything with descriptions and parameters.
 - Discovery: `/resources`, `/actions`, `/events`, `/capabilities`, `/mods`, `/schema`, `/openapi.json`.
 - Data the client can't legitimately have is returned as `{"available": false, "reason": "SERVER_ONLY", ...}`, never invented.
 

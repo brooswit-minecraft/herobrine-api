@@ -49,6 +49,10 @@ public final class HerobrineApiMod {
         ApiContext c = ctx;
         ClientBindings.register(c);
         ModBindings.register(c);
+        WorldBindings.register(c);
+        EntityBindings.register(c);
+        InventoryBindings.register(c);
+        ChatLog.register(c);
         BaritoneBindings.register(c);
         NeoForge.EVENT_BUS.post(new RegisterApiEvent(c));
         if (ClientConfig.ENABLED.get()) {
