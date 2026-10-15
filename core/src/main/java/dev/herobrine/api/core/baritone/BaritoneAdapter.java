@@ -21,7 +21,10 @@ public interface BaritoneAdapter {
     /** Follow every entity the matcher accepts. The matcher receives Minecraft Entity objects. */
     void follow(Predicate<Object> entityMatcher);
     void explore(int x, int z);
-    void mine(List<String> blockIds);
+    /** @param quantity how many to collect; 0 means until cancelled. */
+    void mine(List<String> blockIds, int quantity);
+    /** @param range farming radius; 0 uses Baritone's default. */
+    void farm(int range);
     void cancel();
 
     // ---- building ----
@@ -36,6 +39,10 @@ public interface BaritoneAdapter {
     String activeProcess();
     List<int[]> pathNodes(int cap);
     List<Map<String, Object>> settings();
+    /** Known locations of a block in Baritone's world cache near the given center, nearest regions first. */
+    List<int[]> locationsOf(String blockId, int max, int centerX, int centerZ);
+    /** Baritone waypoints: name, tag, x, y, z. */
+    List<Map<String, Object>> waypoints();
 
     default boolean busy() { return isPathing() || activeProcess() != null; }
 

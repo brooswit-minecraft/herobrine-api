@@ -23,7 +23,10 @@ class ReflectiveBaritoneTest {
         b.gotoPos(1, 2, 3);
         b.gotoXZ(4, 5);
         b.gotoBlock("minecraft:crafting_table");
-        b.mine(List.of("minecraft:stone", "minecraft:coal_ore"));
+        b.mine(List.of("minecraft:stone", "minecraft:coal_ore"), 0);
+        b.mine(List.of("minecraft:iron_ore"), 16);
+        b.farm(8);
+        b.farm(0);
         b.explore(10, -10);
         b.follow(o -> "zombie".equals(o));
         b.cancel();
@@ -32,6 +35,9 @@ class ReflectiveBaritoneTest {
                 "setGoalAndPath:GoalXZ{4,5}",
                 "getToBlock:BOM{minecraft:crafting_table}",
                 "mine:0:minecraft:stone|minecraft:coal_ore",
+                "mine:16:minecraft:iron_ore",
+                "farm:8:null",
+                "farm:0:null",
                 "explore:10,-10",
                 "follow:true,false",
                 "cancelEverything"), FakeBaritone.CALLS);
@@ -61,6 +67,18 @@ class ReflectiveBaritoneTest {
         b.command("goto 1 2");
         assertEquals("cmd:goto 1 2", FakeBaritone.CALLS.get(0));
         assertThrows(ApiException.class, () -> b.command("a\nb"));
+    }
+
+    @Test void worldCacheAndWaypoints() {
+        var found = b.locationsOf("minecraft:diamond_ore", 2, 5, 6);
+        assertEquals("find:minecraft:diamond_ore:2:5,6:4", FakeBaritone.CALLS.get(0));
+        assertEquals(2, found.size());
+        assertArrayEquals(new int[]{20, 65, 20}, found.get(1));
+        var wp = b.waypoints().get(0);
+        assertEquals("home", wp.get("name"));
+        assertEquals("HOME", wp.get("tag"));
+        assertEquals(100, wp.get("x"));
+        assertEquals(-5, wp.get("z"));
     }
 
     @Test void missingApiReportsUnsupportedSoCallersCanFallBack() {

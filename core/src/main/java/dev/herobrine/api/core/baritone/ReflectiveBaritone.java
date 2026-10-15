@@ -86,8 +86,12 @@ public final class ReflectiveBaritone implements BaritoneAdapter {
         invoke(invoke(baritone(), "getExploreProcess"), "explore", x, z);
     }
 
-    @Override public void mine(List<String> blockIds) {
-        invoke(invoke(baritone(), "getMineProcess"), "mineByName", 0, blockIds.toArray(new String[0]));
+    @Override public void mine(List<String> blockIds, int quantity) {
+        invoke(invoke(baritone(), "getMineProcess"), "mineByName", quantity, blockIds.toArray(new String[0]));
+    }
+
+    @Override public void farm(int range) {
+        invoke(invoke(baritone(), "getFarmProcess"), "farm", range, null);
     }
 
     @Override public void cancel() {
@@ -154,6 +158,38 @@ public final class ReflectiveBaritone implements BaritoneAdapter {
         } catch (ReflectiveOperationException e) {
             throw new ApiException(501, "UNSUPPORTED", "Cannot read Baritone settings: " + e);
         }
+    }
+
+    @Override public List<int[]> locationsOf(String blockId, int max, int centerX, int centerZ) {
+        Object cache = invoke(invoke(invoke(baritone(), "getWorldProvider"), "getCurrentWorld"), "getCachedWorld");
+        Object found = invoke(cache, "getLocationsOf", blockId, max, centerX, centerZ, 4);
+        List<int[]> out = new ArrayList<>();
+        if (found instanceof List<?> l) {
+            for (Object p : l) {
+                if (out.size() >= max) break;
+                out.add(new int[]{(Integer) invoke(p, "getX"), (Integer) invoke(p, "getY"), (Integer) invoke(p, "getZ")});
+            }
+        }
+        return out;
+    }
+
+    @Override public List<Map<String, Object>> waypoints() {
+        Object wps = invoke(invoke(invoke(baritone(), "getWorldProvider"), "getCurrentWorld"), "getWaypoints");
+        List<Map<String, Object>> out = new ArrayList<>();
+        if (invoke(wps, "getAllWaypoints") instanceof java.util.Collection<?> all) {
+            for (Object w : all) {
+                Map<String, Object> e = new java.util.LinkedHashMap<>();
+                e.put("name", String.valueOf(invoke(w, "getName")));
+                Object tag = invoke(w, "getTag");
+                e.put("tag", tag instanceof Enum<?> en ? en.name() : String.valueOf(tag));
+                Object loc = invoke(w, "getLocation");
+                e.put("x", invoke(loc, "getX"));
+                e.put("y", invoke(loc, "getY"));
+                e.put("z", invoke(loc, "getZ"));
+                out.add(e);
+            }
+        }
+        return out;
     }
 
     @Override public void command(String line) {

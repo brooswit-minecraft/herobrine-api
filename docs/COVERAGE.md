@@ -37,7 +37,7 @@ Required artifact (spec §17). Status values: **Tested** = covered by automated 
 | Mods (§7.1) | `ModList`, `IModInfo` | `/mods`, `mods.detail` (deps, registered counts per registry) | — | — | LOCAL | Draft | No config exposure; commands/keybindings/capabilities/events not attributed to mods |
 | Commands | `ClientPacketListener#getCommands` | `commands.known` | — | — | SERVER_SYNCED | Draft | Root names only; no client commands, syntax or arg types |
 | Runtime toggle | `ApiController`, `ClientConfig`, `/herobrine_api` | — | `on` / `off` / `status` | — | LOCAL | Draft | Multiplayer control block uses `hasSingleplayerServer()`; no on-screen indicator yet |
-| Baritone (§6) | `BaritoneAdapter` / `ReflectiveBaritone` (core, tested against fakes) over `baritone.api.*`; command manager only as fallback | `baritone.status` (incl. recent path events), `baritone.path` (both need `read.world`), `baritone.settings`, `baritone.schematics` (names only) | See the Baritone table below | event `baritone.path_event` (CALC_FAILED, AT_GOAL, CANCELED, …) | LOCAL | Draft | API names/signatures are from memory and unverified against a real build; path cost not exposed; setting changes go through `set`; `sel` fill/replace syntax unverified; no cylinders |
+| Baritone (§6) | `BaritoneAdapter` / `ReflectiveBaritone` (core, tested against fakes) over `baritone.api.*`; command manager only as fallback | `baritone.status` (incl. recent path events), `baritone.path` (both need `read.world`), `baritone.settings`, `baritone.schematics` (names only) | See the Baritone table below | event `baritone.path_event` (CALC_FAILED, AT_GOAL, CANCELED, …) | LOCAL | Draft | API names/signatures are from memory and unverified against a real build; path cost not exposed; setting changes go through `set`; `sel` fill/replace syntax unverified; no cylinders; skipped on purpose: `click`, `explorefilter`/`saveall`/`reloadall`/`repack` (file access), `come`, `invert`, `gc`, `render`; Baritone's `schematic` command is not exposed (purpose unclear to me) |
 
 ### Baritone: which path each action takes
 Typed API first; if the installed build lacks the call the adapter reports `UNSUPPORTED` and the binding falls back to the command in the last column. Every Baritone action takes the `player.movement` lock; bulk edits need `control.build` and are capped by `maxEditVolume`.
@@ -46,12 +46,14 @@ Typed API first; if the installed build lacks the call the adapter reports `UNSU
 |---|---|---|
 | `goto`, `goto_block` | `ICustomGoalProcess.setGoalAndPath(GoalBlock/GoalXZ)`, `IGetToBlockProcess.getToBlock` | `goto …` |
 | `follow_player`, `follow_entity` | `IFollowProcess.follow(Predicate)` | `follow player/entity …` |
-| `explore`, `mine` | `IExploreProcess.explore`, `IMineProcess.mineByName` | `explore …`, `mine …` |
+| `explore`, `mine` (with quantity), `farm` | `IExploreProcess.explore`, `IMineProcess.mineByName`, `IFarmProcess.farm` | `explore …`, `mine [n] …`, `farm [n]` |
 | `cancel` | `IPathingBehavior.cancelEverything` | `cancel` |
 | `build` | `IBuilderProcess.build(name, file, origin)` | `build name x y z` |
 | `clear_area` | `IBuilderProcess.clearArea` | `sel pos1/pos2/cleararea` |
 | `fill`, `replace`, `clear_selection` | — (schematic composition classes too version-dependent) | `sel …` only |
-| `pause`, `resume`, `repath`, `set_setting` | — | command only |
+| `pause`, `resume`, `repath`, `set_setting`, `tunnel`, `thisway`, `axis`, `surface`, `blacklist`, `set_goal_path`, `waypoint_save`, `waypoint_goto`, `copy_area`, `paste` | — | command only |
+| resource `baritone.find` | `getWorldProvider().getCurrentWorld().getCachedWorld().getLocationsOf(...)` | none |
+| resource `baritone.waypoints` | `getWaypoints().getAllWaypoints()` | none |
 | `command` | — | allowlisted escape hatch |
 
 Operations started by process actions end with Baritone's real outcome from path events: `AT_GOAL` (completed), `CALC_FAILED` (operation `failed` with a reason), `CANCELED`, or `IDLE` for goal-less processes (mine/explore/follow).

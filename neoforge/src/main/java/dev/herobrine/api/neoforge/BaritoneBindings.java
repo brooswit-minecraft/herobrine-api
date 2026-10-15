@@ -39,6 +39,7 @@ final class BaritoneBindings {
             "goto", "follow", "explore", "mine", "farm", "thisway", "tunnel", "come", "surface", "axis",
             "cancel", "stop", "pause", "resume", "repath");
     private static final String NAME_RE = "[A-Za-z0-9_]{1,16}";
+    private static final String WAYPOINT_RE = "[A-Za-z0-9_\\-]{1,32}";
 
     static void register(ApiContext ctx) {
         ctx.integration("baritone", A::installed);
@@ -116,12 +117,82 @@ final class BaritoneBindings {
                     int z = p.has("z") ? p.integer("z") : (int) Math.floor(pl.getZ());
                     return () -> typedOr(() -> A.explore(x, z), "explore " + x + " " + z);
                 });
-        process(ctx, "control.mods", "baritone.mine", "Mine blocks of the given types", b -> b
-                .param(ParamDef.required("blocks", "string", "Space-separated block ids")),
+        process(ctx, "control.mods", "baritone.mine", "Mine blocks of the given types (quantity 0 = until cancelled)", b -> b
+                .param(ParamDef.required("blocks", "string", "Space-separated block ids"))
+                .param(ParamDef.optional("quantity", "integer", "How many to collect; 0 = unlimited", 0)),
                 p -> {
                     List<String> ids = new ArrayList<>();
                     for (String s : p.string("blocks").trim().split("\\s+")) ids.add(Validation.resourceId(s));
-                    return () -> typedOr(() -> A.mine(ids), "mine " + String.join(" ", ids));
+                    int q = inRange(p.integer("quantity", 0), 0, 100_000, "quantity");
+                    return () -> typedOr(() -> A.mine(ids, q), "mine " + (q > 0 ? q + " " : "") + String.join(" ", ids));
+                });
+        process(ctx, "control.mods", "baritone.farm", "Harvest and replant nearby crops", b -> b
+                .param(ParamDef.optional("range", "integer", "Farming radius; 0 = Baritone's default", 0)),
+                p -> {
+                    int range = inRange(p.integer("range", 0), 0, 256, "range");
+                    return () -> typedOr(() -> A.farm(range), range > 0 ? "farm " + range : "farm");
+                });
+        process(ctx, "control.mods", "baritone.tunnel", "Dig a tunnel in the direction you face (height, width, depth: all three or none)", b -> b
+                .param(ParamDef.optional("height", "integer", "Tunnel height", null))
+                .param(ParamDef.optional("width", "integer", "Tunnel width", null))
+                .param(ParamDef.optional("depth", "integer", "Tunnel depth", null)),
+                p -> {
+                    int given = (p.has("height") ? 1 : 0) + (p.has("width") ? 1 : 0) + (p.has("depth") ? 1 : 0);
+                    if (given != 0 && given != 3) throw ApiException.badRequest("Give all of height, width, depth or none");
+                    String cmd = given == 0 ? "tunnel" : "tunnel " + inRange(p.integer("height"), 1, 64, "height") + " "
+                            + inRange(p.integer("width"), 1, 64, "width") + " " + inRange(p.integer("depth"), 1, 10_000, "depth");
+                    return () -> A.command(cmd);
+                });
+        process(ctx, "control.mods", "baritone.thisway", "Walk N blocks in the direction you are facing", b -> b
+                .param(ParamDef.required("distance", "integer", "Blocks to travel (1..10000)")),
+                p -> {
+                    int d = inRange(p.integer("distance"), 1, 10_000, "distance");
+                    return () -> A.command("thisway " + d);
+                });
+        process(ctx, "control.mods", "baritone.axis", "Travel along the nearest axis or diagonal from the origin", b -> b,
+                p -> () -> A.command("axis"));
+        process(ctx, "control.mods", "baritone.surface", "Go up to the surface", b -> b, p -> () -> A.command("surface"));
+        simple(ctx, "control.mods", "baritone.blacklist",
+                "Blacklist the closest block of the current mine/get-to-block target (use when Baritone is stuck on it)",
+                () -> A.command("blacklist"));
+
+        process(ctx, "control.mods", "baritone.waypoint_goto", "Pathfind to a saved Baritone waypoint", b -> b
+                .param(ParamDef.required("name", "string", "Waypoint name")),
+                p -> {
+                    String name = checked(p.string("name"), WAYPOINT_RE);
+                    return () -> A.command("wp goto " + name);
+                });
+        ctx.actions.register("baritone.waypoint_save", ActionDef.builder("baritone.waypoint_save", "Save your current position as a Baritone waypoint")
+                .param(ParamDef.required("name", "string", "Waypoint name (letters, digits, _ and -)"))
+                .permission("control.mods").lock(LOCK)
+                .handler(p -> {
+                    requirePlayer();
+                    String name = checked(p.string("name"), WAYPOINT_RE);
+                    A.command("wp save user " + name);
+                    return Map.of("saved", name);
+                }));
+        ctx.resources.register("baritone.waypoints", new ResourceDef("baritone.waypoints",
+                "Baritone waypoints (name, tag, x, y, z). Params: offset, limit", Availability.LOCAL, "read.world", q -> {
+                    if (!A.installed()) return Unavailable.of("baritone.waypoints", Reason.MOD_NOT_INSTALLED);
+                    return Page.of(A.waypoints(), q, 200, 1000);
+                }));
+        ctx.resources.register("baritone.find", new ResourceDef("baritone.find",
+                "Known locations of a block type in Baritone's world cache, nearest regions to you first. Params: block (required), limit (default 100, max 1000)",
+                Availability.LOCAL, "read.world", q -> {
+                    if (!A.installed()) return Unavailable.of("baritone.find", Reason.MOD_NOT_INSTALLED);
+                    String id = Validation.resourceId(q.string("block"));
+                    int limit = inRange(q.integer("limit", 100), 1, 1000, "limit");
+                    LocalPlayer pl = requirePlayerNow();
+                    List<int[]> found = A.locationsOf(id, limit, (int) Math.floor(pl.getX()), (int) Math.floor(pl.getZ()));
+                    return Map.of("block", id, "count", found.size(), "locations", found);
+                }));
+        process(ctx, "control.mods", "baritone.set_goal_path", "Set a goal and start pathing to it (same as goto but via the goal/path commands)", b -> b
+                .param(ParamDef.required("x", "integer", "Block X"))
+                .param(ParamDef.required("y", "integer", "Block Y"))
+                .param(ParamDef.required("z", "integer", "Block Z")),
+                p -> {
+                    int x = p.integer("x"), y = p.integer("y"), z = p.integer("z");
+                    return () -> { A.command("goal " + x + " " + y + " " + z); A.command("path"); };
                 });
 
         simple(ctx, "control.mods", "baritone.cancel", "Cancel the current Baritone task",
@@ -214,6 +285,11 @@ final class BaritoneBindings {
                     return () -> runAll(cmds);
                 });
 
+        process(ctx, "control.build", "baritone.copy_area", "Copy a box (relative to you) to Baritone's clipboard",
+                b -> withCorners(b), p -> { List<String> cmds = selectThen(p, "sel copy"); return () -> runAll(cmds); });
+        process(ctx, "control.build", "baritone.paste", "Build the copied clipboard at your current position (move first)",
+                b -> b, p -> () -> A.command("sel paste"));
+
         simple(ctx, "control.build", "baritone.clear_selection", "Clear Baritone's current selection", () -> A.command("sel clear"));
 
         process(ctx, "control.build", "baritone.build",
@@ -264,6 +340,17 @@ final class BaritoneBindings {
             if (!"UNSUPPORTED".equals(e.code)) throw e;
             for (String c : fallbackCommands) A.command(c);
         }
+    }
+
+    private static int inRange(int v, int min, int max, String name) {
+        if (v < min || v > max) throw ApiException.badRequest("'" + name + "' must be between " + min + " and " + max);
+        return v;
+    }
+
+    private static LocalPlayer requirePlayerNow() {
+        LocalPlayer p = Minecraft.getInstance().player;
+        if (p == null) throw ApiException.unavailable("Player is not connected to a world");
+        return p;
     }
 
     private static String checked(String s, String regex) {

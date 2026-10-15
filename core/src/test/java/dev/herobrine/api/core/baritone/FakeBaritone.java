@@ -22,7 +22,15 @@ public final class FakeBaritone {
         ICustomGoal getCustomGoalProcess(); IMine getMineProcess(); IFollow getFollowProcess(); Object getExploreProcess();
         IGetToBlock getGetToBlockProcess(); IPathing getPathingBehavior(); IControl getPathingControlManager();
         IBuilder getBuilderProcess(); ICmdManager getCommandManager(); IEventHandler getGameEventHandler();
+        IFarm getFarmProcess(); IWorldProvider getWorldProvider();
     }
+    public interface IFarm { void farm(int range, Object pos); }
+    public interface IWorldProvider { IWorld getCurrentWorld(); }
+    public interface IWorld { ICached getCachedWorld(); IWaypoints getWaypoints(); }
+    public interface ICached { List<Pos> getLocationsOf(String block, int max, int cx, int cz, int regionsSq); }
+    public interface IWaypoints { java.util.Set<IWaypoint> getAllWaypoints(); }
+    public enum Tag { HOME, USER }
+    public interface IWaypoint { String getName(); Tag getTag(); Pos getLocation(); }
     public interface ICustomGoal { void setGoalAndPath(Object goal); }
     public interface IMine { void mineByName(int quantity, String... blocks); }
     public interface IFollow { void follow(Predicate<?> p); }
@@ -43,7 +51,7 @@ public final class FakeBaritone {
     public static void reset() { CALLS.clear(); listener = null; lackExplore = false; primaryIsNull = false; }
 
     private static final class Impl implements IBaritone, ICustomGoal, IMine, IFollow, IExplore, IGetToBlock, IPathing,
-            IPath, IControl, IProcess, IBuilder, ICmdManager, IEventHandler {
+            IPath, IControl, IProcess, IBuilder, ICmdManager, IEventHandler, IFarm, IWorldProvider, IWorld, ICached, IWaypoints, IWaypoint {
         public ICustomGoal getCustomGoalProcess() { return this; }
         public IMine getMineProcess() { return this; }
         public IFollow getFollowProcess() { return this; }
@@ -74,5 +82,19 @@ public final class FakeBaritone {
         public void clearArea(Object a, Object b) { CALLS.add("clearArea:" + a + "->" + b); }
         public boolean execute(String line) { CALLS.add("cmd:" + line); return true; }
         public void registerEventListener(IGameEventListener l) { listener = l; }
+        public IFarm getFarmProcess() { return this; }
+        public IWorldProvider getWorldProvider() { return this; }
+        public void farm(int range, Object pos) { CALLS.add("farm:" + range + ":" + pos); }
+        public IWorld getCurrentWorld() { return this; }
+        public ICached getCachedWorld() { return this; }
+        public IWaypoints getWaypoints() { return this; }
+        public List<Pos> getLocationsOf(String block, int max, int cx, int cz, int regionsSq) {
+            CALLS.add("find:" + block + ":" + max + ":" + cx + "," + cz + ":" + regionsSq);
+            return List.of(new Pos(10, 64, 10), new Pos(20, 65, 20), new Pos(30, 66, 30));
+        }
+        public java.util.Set<IWaypoint> getAllWaypoints() { return java.util.Set.of(this); }
+        public String getName() { return "home"; }
+        public Tag getTag() { return Tag.HOME; }
+        public Pos getLocation() { return new Pos(100, 70, -5); }
     }
 }
