@@ -52,6 +52,7 @@ public final class HerobrineApiMod {
         WorldBindings.register(c);
         EntityBindings.register(c);
         InventoryBindings.register(c);
+        CraftingBindings.register(c);
         ChatLog.register(c);
         BaritoneBindings.register(c);
         NeoForge.EVENT_BUS.post(new RegisterApiEvent(c));

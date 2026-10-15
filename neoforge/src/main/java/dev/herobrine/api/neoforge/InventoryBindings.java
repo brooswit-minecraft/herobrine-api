@@ -48,7 +48,7 @@ final class InventoryBindings {
                 });
 
         read(ctx, "container.open",
-                "The menu you have open (chest, furnace, your own inventory screen, ...): its non-empty slots with their GUI positions, and the carried stack",
+                "The menu you have open (chest, furnace, your own inventory screen, ...): its non-empty slots with their GUI positions, the carried stack, and the crafting grid layout (result slot, size) if it has one",
                 q -> {
                     LocalPlayer p = Game.player();
                     HolderLookup.Provider registries = p.level().registryAccess();
@@ -70,6 +70,7 @@ final class InventoryBindings {
                     m.put("slotCount", menu.slots.size());
                     m.put("slots", slots);
                     m.put("carried", describe(menu.getCarried(), registries));
+                    m.put("crafting", CraftingBindings.gridInfo(menu));
                     return m;
                 });
     }
@@ -130,7 +131,7 @@ final class InventoryBindings {
     }
 
     /** Sends one container click. The server's response arrives on later ticks: read container.open afterwards. */
-    private static Object click(Params p, int slot, int button, ClickType type) {
+    static Object click(Params p, int slot, int button, ClickType type) {
         LocalPlayer player = Game.player();
         MultiPlayerGameMode gameMode = Minecraft.getInstance().gameMode;
         if (gameMode == null) throw ApiException.unavailable("Not connected to a game");
