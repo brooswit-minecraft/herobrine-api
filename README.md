@@ -10,7 +10,7 @@ now, actions do the thing and return what it returned. The API keeps no operatio
 
 ## CI
 `.github/workflows/ci.yml` runs the `core` tests and the NeoForge build on every PR and push to `main`. Publishing a GitHub release
-(`release.yml`) rebuilds and attaches `herobrine-api-*.jar` to it.
+(`release.yml`) rebuilds and attaches `herobrine-api-*.jar` to it. Pushing a tag like `v0.1.0` does the same and creates the release.
 
 ## Usage
 The API is **on by default** and listens on `127.0.0.1:25580` (`port` in `config/herobrine_api-client.toml`).

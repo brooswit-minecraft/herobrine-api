@@ -1,6 +1,10 @@
 name: Release
 
+# Push a tag like v0.1.0 to build and publish a GitHub release with the mod jar.
+# Publishing a release by hand also works: the jar is attached to it.
 on:
+  push:
+    tags: ['v*']
   release:
     types: [published]
 
@@ -18,7 +22,12 @@ jobs:
           java-version: 21
       - uses: gradle/actions/setup-gradle@v4
       - run: ./gradlew :core:test -PwithNeoForge :neoforge:build
-      - name: Attach mod jar to the release
+      - name: Mod jar bundles the core classes
+        run: unzip -l neoforge/build/libs/herobrine-api-*.jar | grep -q 'dev/herobrine/api/core/ApiServer.class'
+      - name: Publish the jar on the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" neoforge/build/libs/herobrine-api-*.jar --clobber
+          TAG: ${{ github.event.release.tag_name || github.ref_name }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes --prerelease
+          gh release upload "$TAG" neoforge/build/libs/herobrine-api-*.jar --clobber
