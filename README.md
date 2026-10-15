@@ -25,6 +25,7 @@ curl -H "$H" -d '{"mode":"sequential","actions":[{"action":"player.look","parame
 
 Every action returns `{"success":…, "action":…, "stage":…, "result":…}` or `{"success":false,"error":{"code","message"}}`.
 Long-running actions return an `operationId`; poll `/operations/{id}` or `POST /operations/{id}/cancel`.
+Bulk block editing (`baritone.fill`, `clear_area`, `replace`, `build`) needs its own `control.build` permission, caps the box size (`maxEditVolume` in the config) and only reads schematics by bare file name from `<game dir>/schematics`.
 Actions that share a lock (e.g. `player.movement`) cannot be driven by two tokens at once.
 
 ## Extending from another mod

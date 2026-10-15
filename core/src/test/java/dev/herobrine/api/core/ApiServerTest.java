@@ -316,4 +316,18 @@ class ApiServerTest {
         assertThrows(ApiException.class, () -> Validation.commandLine("goto; set x", allowed));
         assertThrows(ApiException.class, () -> Validation.commandLine("", allowed));
     }
+
+    @Test void buildValidation() {
+        assertEquals("minecraft:stone", Validation.resourceId("minecraft:stone"));
+        for (String bad : new String[]{"Stone", "a b", "x;y", "", "minecraft:"})
+            assertThrows(ApiException.class, () -> Validation.resourceId(bad), bad);
+        assertEquals("house.schem", Validation.schematicName("house.schem"));
+        for (String bad : new String[]{"../x.schem", "a/b.schem", "a\\b.schem", "x.txt", "..schem", "", "/etc/passwd.nbt", "a b.schem"})
+            assertThrows(ApiException.class, () -> Validation.schematicName(bad), bad);
+        assertEquals(27, Validation.boxVolume(0, 0, 0, 2, 2, 2, 100));
+        assertEquals(27, Validation.boxVolume(2, 2, 2, 0, 0, 0, 100)); // corner order doesn't matter
+        assertThrows(ApiException.class, () -> Validation.boxVolume(0, 0, 0, 99, 99, 99, 1000));
+        assertThrows(ApiException.class, () -> Validation.boxVolume(0, 0, 0, Integer.MAX_VALUE, 0, 0, Long.MAX_VALUE));
+        assertTrue(tokens.create("builder", Set.of("control.build")).secret().length() > 10);
+    }
 }

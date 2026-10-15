@@ -15,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class TokenStore {
     public static final Set<String> ALL_PERMISSIONS = Set.of(
             "read.client", "read.world", "read.entities", "read.players", "read.inventory", "read.network", "read.gui",
-            "control.input", "control.player", "control.inventory", "control.gui", "control.chat", "control.mods",
+            "control.input", "control.player", "control.inventory", "control.gui", "control.chat", "control.mods", "control.build",
             "control.server", "admin.api");
 
     public record Token(String id, String name, Set<String> permissions, long createdAtMillis) {
