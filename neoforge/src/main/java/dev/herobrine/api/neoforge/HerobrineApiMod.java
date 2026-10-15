@@ -15,7 +15,6 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
-import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import org.slf4j.Logger;
@@ -23,7 +22,7 @@ import org.slf4j.Logger;
 /**
  * Client-only entry point. Registers built-in bindings, lets other mods register theirs via
  * {@link RegisterApiEvent}, then starts the loopback HTTP server if enabled in the config.
- * Toggle at runtime with {@code /herobrine_api on|off|status}.
+ * Toggle at runtime with {@code /herobrine_api on|off|status|regenerate}.
  */
 @Mod(value = HerobrineApiMod.MOD_ID, dist = Dist.CLIENT)
 @EventBusSubscriber(modid = HerobrineApiMod.MOD_ID, value = Dist.CLIENT)
@@ -39,6 +38,7 @@ public final class HerobrineApiMod {
         ApiContext c = new ApiContext(new MinecraftGameThread());
         c.platform = "neoforge-1.21.1";
         c.controlBlock = HerobrineApiMod::controlBlockReason;
+        c.log = msg -> LOG.info("[api] {}", msg);
         ctx = c;
         controller = new ApiController(c);
         modBus.addListener(HerobrineApiMod::onClientSetup);
@@ -70,12 +70,6 @@ public final class HerobrineApiMod {
     }
 
     @SubscribeEvent
-    public static void onClientTick(ClientTickEvent.Post event) {
-        ApiContext c = ctx;
-        if (c != null) c.operations.tick();
-    }
-
-    @SubscribeEvent
     public static void onRegisterCommands(RegisterClientCommandsEvent event) {
         CommandDispatcher<CommandSourceStack> d = event.getDispatcher();
         d.register(Commands.literal("herobrine_api")
@@ -94,7 +88,16 @@ public final class HerobrineApiMod {
                     ClientConfig.ENABLED.set(false);
                     ClientConfig.ENABLED.save();
                     controller.stop();
-                    reply(cx.getSource(), "Herobrine API stopped; running operations cancelled");
+                    reply(cx.getSource(), "Herobrine API stopped; held keys released");
+                    return 1;
+                }))
+                .then(Commands.literal("regenerate").executes(cx -> {
+                    try {
+                        controller.regenerateTokens();
+                        reply(cx.getSource(), "New tokens written to config/herobrine_api.token and herobrine_api.read-token");
+                    } catch (Exception e) {
+                        reply(cx.getSource(), "Could not regenerate tokens: " + e.getMessage());
+                    }
                     return 1;
                 }))
                 .then(Commands.literal("status").executes(cx -> {

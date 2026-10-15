@@ -3,17 +3,15 @@ package dev.herobrine.api.core;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
-/** Everything the server needs. Platform modules populate the registries. */
+/** Everything the server needs. Platform modules populate the registries. Holds no request state. */
 public final class ApiContext {
     public final Registry<ActionDef> actions = new Registry<>("action");
     public final Registry<ResourceDef> resources = new Registry<>("resource");
-    public final Operations operations = new Operations();
-    public final ActionExecutor executor = new ActionExecutor(this);
     public final EventBus events = new EventBus();
-    public final AuditLog audit = new AuditLog();
     public final GameThread gameThread;
     /** Supplies the /mods payload; set by the platform module. */
     public volatile Supplier<Object> mods = () -> java.util.List.of();
@@ -21,9 +19,11 @@ public final class ApiContext {
     public volatile LongSupplier observedTick = () -> -1;
     public volatile BooleanSupplier serverCompanion = () -> false;
     public volatile String platform = "unknown";
+    /** Where executed actions are logged (the game log). */
+    public volatile Consumer<String> log = s -> {};
     /**
-     * Returns a human-readable reason while control actions ("control.*" permissions) must be refused,
-     * or null when they are allowed. Evaluated on the game thread every time a control action runs.
+     * Returns a human-readable reason while actions must be refused (e.g. on multiplayer servers),
+     * or null when they are allowed. Evaluated on the game thread every time an action runs.
      */
     public volatile Supplier<String> controlBlock = () -> null;
 
@@ -36,7 +36,7 @@ public final class ApiContext {
     public void capability(String name, BooleanSupplier available) { capabilityFlags.put(name, available); }
     public void integration(String name, BooleanSupplier installed) { integrations.put(name, installed); }
 
-    /** Spec 11.3 payload. Call on the game thread. */
+    /** Capabilities payload. Call on the game thread. */
     public Map<String, Object> capabilitiesDocument() {
         Map<String, Object> caps = new java.util.TreeMap<>(), ints = new java.util.TreeMap<>();
         capabilityFlags.forEach((k, v) -> caps.put(k, v.getAsBoolean()));

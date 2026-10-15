@@ -95,9 +95,9 @@ class ReflectiveBaritoneTest {
     }
 
     @Test void pathEventsAreCapturedThroughTheListenerProxy() {
-        long before = b.eventSeq();
         List<String> pushed = new ArrayList<>();
         b.addEventListener(pushed::add);
+        assertNull(b.lastPathEvent());
         assertNull(FakeBaritone.listener);
         b.gotoPos(1, 2, 3); // first Baritone access registers the listener
         assertNotNull(FakeBaritone.listener);
@@ -109,9 +109,8 @@ class ReflectiveBaritoneTest {
         l.onPathEvent(PathEventFake.CALC_STARTED);
         l.onPathEvent(PathEventFake.AT_GOAL);
 
-        assertEquals(List.of("CALC_STARTED", "AT_GOAL"), b.eventsAfter(before));
+        assertEquals("AT_GOAL", b.lastPathEvent());
         assertEquals(List.of("CALC_STARTED", "AT_GOAL"), pushed);
-        assertEquals(List.of("AT_GOAL"), b.eventsAfter(b.eventSeq() - 1));
         assertNotNull(l.toString());
         assertEquals(l, l);
     }

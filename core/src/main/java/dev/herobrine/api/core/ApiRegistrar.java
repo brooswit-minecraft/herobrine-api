@@ -19,17 +19,13 @@ public final class ApiRegistrar {
     public String modId() { return modId; }
 
     public void resource(String name, String description, Availability availability, Function<Params, Object> supplier) {
-        resource(name, description, availability, "read.client", supplier);
-    }
-
-    public void resource(String name, String description, Availability availability, String permission, Function<Params, Object> supplier) {
         String id = modId + "." + name;
-        ctx.resources.register(id, new ResourceDef(id, description, availability, permission, supplier));
+        ctx.resources.register(id, new ResourceDef(id, description, availability, supplier));
     }
 
     /** Builder-based action registration; the action name is prefixed automatically. */
     public ActionDef.Builder action(String name, String description) {
-        return ActionDef.builder(modId + "." + name, description).permission("control.mods");
+        return ActionDef.builder(modId + "." + name, description);
     }
 
     public void register(ActionDef def) { ctx.actions.register(def.name(), def); }

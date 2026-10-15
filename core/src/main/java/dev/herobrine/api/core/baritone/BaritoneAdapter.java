@@ -50,8 +50,8 @@ public interface BaritoneAdapter {
     void command(String line);
 
     // ---- path events (CALC_FAILED, AT_GOAL, CANCELED, ...) ----
-    /** Monotonic counter; take a value before starting work, then ask {@link #eventsAfter}. */
-    long eventSeq();
-    List<String> eventsAfter(long seq);
+    /** The most recent path event name, or null if none has been seen. */
+    String lastPathEvent();
+    /** Called for every path event as it happens. */
     void addEventListener(Consumer<String> listener);
 }

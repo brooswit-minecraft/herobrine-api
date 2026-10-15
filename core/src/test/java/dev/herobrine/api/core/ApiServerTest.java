@@ -8,23 +8,37 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.util.Set;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.io.TempDir;
 
 class ApiServerTest {
     static ApiServer server;
     static ApiContext ctx;
-    static TokenStore tokens;
-    static String base, admin, reader, controller, controller2;
+    static Tokens tokens;
+    static String base, full, read;
+    static final AtomicInteger counter = new AtomicInteger();
+    static final List<Runnable> deferred = new ArrayList<>();
+    static volatile boolean deferTasks;
     static final HttpClient http = HttpClient.newHttpClient();
+    @TempDir static Path tmp;
 
     @BeforeAll
     static void start() throws Exception {
         ctx = new ApiContext(new GameThread() {
-            public <T> CompletableFuture<T> submit(java.util.concurrent.Callable<T> t) {
-                try { return CompletableFuture.completedFuture(t.call()); }
-                catch (Throwable e) { return CompletableFuture.failedFuture(e); }
+            public <T> CompletableFuture<T> submit(Callable<T> t) {
+                CompletableFuture<T> f = new CompletableFuture<>();
+                Runnable run = () -> {
+                    try { f.complete(t.call()); } catch (Throwable e) { f.completeExceptionally(e); }
+                };
+                if (deferTasks) deferred.add(run); else run.run();
+                return f;
             }
         });
         ctx.observedTick = () -> 42;
@@ -35,26 +49,16 @@ class ApiServerTest {
         ctx.resources.register("test.big", new ResourceDef("test.big", "Big", Availability.LOCAL, q -> "x".repeat(10_000)));
         ctx.resources.register("test.missing", new ResourceDef("test.missing", "Missing", Availability.REQUIRES_SERVER_MOD,
                 q -> Unavailable.of("entity.brain", Reason.SERVER_ONLY)));
-        ctx.actions.register("test.echo", ActionDef.builder("test.echo", "Echo").permission("control.chat")
+        ctx.actions.register("test.echo", ActionDef.builder("test.echo", "Echo")
                 .param(ParamDef.required("text", "string", "Text")).handler(p -> java.util.Map.of("text", p.string("text"))));
-        ctx.actions.register("test.slow", ActionDef.builder("test.slow", "Slow").lock("player.movement").handler(p -> new LongRunning() {
-            int n = 0;
-            public Object tick() { return ++n >= 3 ? "done" : null; }
-            public Object progress() { return java.util.Map.of("n", n); }
-        }));
-        ctx.actions.register("test.forever", ActionDef.builder("test.forever", "Never finishes").handler(p -> new LongRunning() {
-            public Object tick() { return null; }
-        }));
-        ctx.actions.register("test.look", ActionDef.builder("test.look", "Instant, locked").lock("player.movement").handler(p -> "looked"));
+        ctx.actions.register("test.count", ActionDef.builder("test.count", "Counts calls").handler(p -> counter.incrementAndGet()));
         ctx.actions.register("test.fail", ActionDef.builder("test.fail", "Fails").handler(p -> { throw ApiException.unavailable("Player is not connected to a world"); }));
-        ctx.actions.register("test.staged", ActionDef.builder("test.staged", "Staged").handler(p -> new Staged("x", Stage.CONFIRMED)));
+        ctx.actions.register("test.enum", ActionDef.builder("test.enum", "Enum").param(new ParamDef("shape", "string", true, "s", null, List.of("a", "b"))).handler(p -> p.string("shape")));
 
-        tokens = new TokenStore();
-        admin = tokens.create("admin", Set.of("*")).secret();
-        reader = tokens.create("reader", Set.of("read.*")).secret();
-        controller = tokens.create("c1", Set.of("read.*", "control.*")).secret();
-        controller2 = tokens.create("c2", Set.of("read.*", "control.*")).secret();
-        server = new ApiServer(ctx, tokens, new Limits(32, 10_000, 5_000, 1 << 20, 8, 10_000, 1000, 5));
+        tokens = Tokens.loadOrCreate(tmp.resolve("full.token"), tmp.resolve("read.token"));
+        full = Files.readString(tokens.fullFile()).trim();
+        read = Files.readString(tokens.readFile()).trim();
+        server = new ApiServer(ctx, tokens, new Limits(32, 5_000, 1 << 20, 8, 300, 1000));
         base = "http://127.0.0.1:" + server.start(0) + "/api/v1";
     }
 
@@ -74,157 +78,144 @@ class ApiServerTest {
         return call("POST", "/actions/execute", "{\"action\":\"" + action + "\",\"parameters\":" + params + "}", token);
     }
 
-    static String startOp(String token, String action) throws Exception {
-        return obj(exec(token, action, "{}")).getAsJsonObject("result").get("operationId").getAsString();
-    }
-
-    static String status(String token, String id) throws Exception {
-        return obj(call("GET", "/operations/" + id, null, token)).get("status").getAsString();
-    }
+    // ---- auth ----
 
     @Test void requiresValidToken() throws Exception {
         assertEquals(401, call("GET", "", null, null).statusCode());
         assertEquals(401, call("GET", "", null, "wrong").statusCode());
-        assertEquals(200, call("GET", "", null, admin).statusCode());
+        assertEquals(200, call("GET", "", null, full).statusCode());
+        assertEquals(200, call("GET", "", null, read).statusCode());
     }
 
-    @Test void discoveryAndCapabilities() throws Exception {
-        for (String p : new String[]{"/resources", "/actions", "/events", "/mods", "/schema", "/openapi.json", "/operations"})
-            assertEquals(200, call("GET", p, null, admin).statusCode(), p);
-        JsonObject caps = obj(call("GET", "/capabilities", null, reader));
+    @Test void readTokenReadsEverythingButCannotAct() throws Exception {
+        for (String p : new String[]{"/resources", "/actions", "/events", "/capabilities", "/mods", "/schema", "/openapi.json", "/resources/test.info"})
+            assertEquals(200, call("GET", p, null, read).statusCode(), p);
+        var denied = exec(read, "test.echo", "{\"text\":\"hi\"}");
+        assertEquals(403, denied.statusCode());
+        assertEquals("PERMISSION_DENIED", obj(denied).getAsJsonObject("error").get("code").getAsString());
+        assertFalse(obj(call("GET", "/actions", null, read)).getAsJsonObject("test.echo").get("permitted").getAsBoolean());
+        assertTrue(obj(call("GET", "/actions", null, full)).getAsJsonObject("test.echo").get("permitted").getAsBoolean());
+        assertEquals(200, exec(full, "test.echo", "{\"text\":\"hi\"}").statusCode());
+    }
+
+    // ---- discovery / resources ----
+
+    @Test void capabilitiesAndOpenApi() throws Exception {
+        JsonObject caps = obj(call("GET", "/capabilities", null, read));
         assertTrue(caps.get("client").getAsBoolean());
         assertFalse(caps.get("serverCompanion").getAsBoolean());
         assertFalse(caps.getAsJsonObject("capabilities").get("world.unloadedChunks").getAsBoolean());
         assertFalse(caps.getAsJsonObject("integrations").get("baritone").getAsBoolean());
-        JsonObject doc = obj(call("GET", "/openapi.json", null, admin));
+        JsonObject doc = obj(call("GET", "/openapi.json", null, read));
         assertTrue(doc.getAsJsonObject("paths").has("/api/v1/resources/test.info"));
     }
 
-    @Test void resourceEnvelopeAndUnavailable() throws Exception {
-        JsonObject r = obj(call("GET", "/resources/test.info", null, reader));
+    @Test void resourceEnvelopeAndUnavailableMarker() throws Exception {
+        JsonObject r = obj(call("GET", "/resources/test.info", null, read));
         assertTrue(r.get("success").getAsBoolean());
         assertEquals(42, r.get("observedTick").getAsLong());
         assertEquals("client", r.get("source").getAsString());
-        JsonObject m = obj(call("GET", "/resources/test.missing", null, reader)).getAsJsonObject("value");
+        JsonObject m = obj(call("GET", "/resources/test.missing", null, read)).getAsJsonObject("value");
         assertFalse(m.get("available").getAsBoolean());
         assertEquals("SERVER_ONLY", m.get("reason").getAsString());
-        assertEquals(404, call("GET", "/resources/nope", null, reader).statusCode());
-    }
-
-    @Test void permissionsEnforced() throws Exception {
-        assertEquals(403, exec(reader, "test.echo", "{\"text\":\"hi\"}").statusCode());
-        assertEquals(200, exec(controller, "test.echo", "{\"text\":\"hi\"}").statusCode());
-        assertEquals(403, call("GET", "/admin/tokens", null, controller).statusCode());
-        assertEquals(200, call("GET", "/admin/tokens", null, admin).statusCode());
-    }
-
-    @Test void tokenCreateAndImmediateRevoke() throws Exception {
-        JsonObject created = obj(call("POST", "/admin/tokens", "{\"name\":\"tmp\",\"permissions\":[\"read.client\"]}", admin));
-        String secret = created.get("secret").getAsString();
-        String id = created.getAsJsonObject("token").get("id").getAsString();
-        assertEquals(200, call("GET", "/resources/test.info", null, secret).statusCode());
-        assertEquals(400, call("POST", "/admin/tokens", "{\"name\":\"x\",\"permissions\":[\"bogus\"]}", admin).statusCode());
-        assertEquals(200, call("DELETE", "/admin/tokens/" + id, null, admin).statusCode());
-        assertEquals(401, call("GET", "/resources/test.info", null, secret).statusCode());
-        assertTrue(call("GET", "/admin/audit", null, admin).body().contains("revoked token"));
-    }
-
-    @Test void standardResultsAndStages() throws Exception {
-        JsonObject ok = obj(exec(controller, "test.echo", "{\"text\":\"hi\"}"));
-        assertTrue(ok.get("success").getAsBoolean());
-        assertEquals("test.echo", ok.get("action").getAsString());
-        assertEquals("EXECUTED_LOCALLY", ok.get("stage").getAsString());
-        assertEquals("CONFIRMED", obj(exec(controller, "test.staged", "{}")).get("stage").getAsString());
-        var bad = exec(controller, "test.fail", "{}");
-        assertEquals(409, bad.statusCode());
-        JsonObject err = obj(bad).getAsJsonObject("error");
-        assertEquals("ACTION_UNAVAILABLE", err.get("code").getAsString());
-        assertFalse(obj(bad).get("success").getAsBoolean());
-    }
-
-    @Test void validation() throws Exception {
-        assertEquals(400, exec(controller, "test.echo", "{}").statusCode());
-        assertEquals(400, exec(controller, "test.echo", "{\"text\":1}").statusCode());
-        assertEquals(400, exec(controller, "test.echo", "{\"text\":\"a\",\"x\":1}").statusCode());
-        assertEquals(404, call("POST", "/actions/execute", "{\"action\":\"nope\"}", controller).statusCode());
-        assertEquals(400, call("POST", "/actions/execute", "not json", controller).statusCode());
-    }
-
-    @Test void operationLifecycleOwnershipAndCancel() throws Exception {
-        String id = startOp(controller, "test.slow");
-        assertEquals("running", status(controller, id));
-        assertEquals(403, call("GET", "/operations/" + id, null, controller2).statusCode());
-        assertEquals(200, call("GET", "/operations/" + id, null, admin).statusCode());
-        ctx.operations.tick();
-        assertEquals(1, ((Number) ((java.util.Map<?, ?>) ctx.operations.get(id).progress).get("n")).intValue());
-        ctx.operations.tick(); ctx.operations.tick();
-        JsonObject done = obj(call("GET", "/operations/" + id, null, controller));
-        assertEquals("completed", done.get("status").getAsString());
-        assertEquals("done", done.get("result").getAsString());
-
-        String id2 = startOp(controller, "test.forever");
-        assertEquals(403, call("POST", "/operations/" + id2 + "/cancel", null, controller2).statusCode());
-        assertEquals("cancelled", obj(call("POST", "/operations/" + id2 + "/cancel", null, controller)).get("status").getAsString());
-        assertTrue(call("GET", "/operations?status=cancelled", null, controller).body().contains(id2));
-        assertFalse(call("GET", "/operations", null, controller2).body().contains(id2));
-    }
-
-    @Test void resourceLocksArbitrateControllers() throws Exception {
-        String id = startOp(controller, "test.slow");
-        var conflict = exec(controller2, "test.look", "{}");
-        assertEquals(409, conflict.statusCode());
-        assertEquals("RESOURCE_LOCKED", obj(conflict).getAsJsonObject("error").get("code").getAsString());
-        assertEquals(409, exec(controller2, "test.slow", "{}").statusCode());
-        assertEquals(200, exec(controller, "test.look", "{}").statusCode()); // holder may act
-        call("POST", "/operations/" + id + "/cancel", null, controller);
-        assertEquals(200, exec(controller2, "test.look", "{}").statusCode()); // released
-    }
-
-    @Test void timeout() throws Exception {
-        var r = call("POST", "/actions/execute", "{\"action\":\"test.forever\",\"timeoutMs\":1}", controller);
-        String id = obj(r).getAsJsonObject("result").get("operationId").getAsString();
-        Thread.sleep(20);
-        ctx.operations.tick();
-        assertEquals("timed_out", status(controller, id));
-    }
-
-    @Test void delayedAction() throws Exception {
-        var r = call("POST", "/actions/execute", "{\"action\":\"test.echo\",\"parameters\":{\"text\":\"later\"},\"delayTicks\":2}", controller);
-        assertEquals("ACCEPTED", obj(r).get("stage").getAsString());
-        String id = obj(r).getAsJsonObject("result").get("operationId").getAsString();
-        ctx.operations.tick(); ctx.operations.tick();
-        assertEquals("running", status(controller, id));
-        ctx.operations.tick();
-        JsonObject done = obj(call("GET", "/operations/" + id, null, controller));
-        assertEquals("completed", done.get("status").getAsString());
-        assertEquals("later", done.getAsJsonObject("result").get("text").getAsString());
-    }
-
-    @Test void sequentialBatch() throws Exception {
-        String body = "{\"mode\":\"sequential\",\"actions\":[{\"action\":\"test.echo\",\"parameters\":{\"text\":\"a\"}},{\"action\":\"test.slow\"},{\"action\":\"test.echo\",\"parameters\":{\"text\":\"b\"}}]}";
-        String id = obj(call("POST", "/actions/batch", body, controller)).getAsJsonObject("result").get("operationId").getAsString();
-        for (int i = 0; i < 12; i++) ctx.operations.tick();
-        JsonObject done = obj(call("GET", "/operations/" + id, null, controller));
-        assertEquals("completed", done.get("status").getAsString());
-        assertEquals(3, done.getAsJsonObject("result").getAsJsonArray("results").size());
-    }
-
-    @Test void concurrentBatchAndLimits() throws Exception {
-        String body = "{\"mode\":\"concurrent\",\"actions\":[{\"action\":\"test.echo\",\"parameters\":{\"text\":\"a\"}},{\"action\":\"test.fail\"}]}";
-        var res = obj(call("POST", "/actions/batch", body, controller)).getAsJsonArray("results");
-        assertTrue(res.get(0).getAsJsonObject().get("success").getAsBoolean());
-        assertFalse(res.get(1).getAsJsonObject().get("success").getAsBoolean());
-        String tooMany = "{\"actions\":[" + "{\"action\":\"test.look\"},".repeat(6) + "{\"action\":\"test.look\"}]}";
-        assertEquals(400, call("POST", "/actions/batch", tooMany, controller).statusCode());
+        assertEquals(404, call("GET", "/resources/nope", null, read).statusCode());
     }
 
     @Test void responseSizeLimit() throws Exception {
-        var r = call("GET", "/resources/test.big", null, reader);
+        var r = call("GET", "/resources/test.big", null, read);
         assertEquals(413, r.statusCode());
         assertEquals("RESPONSE_TOO_LARGE", obj(r).getAsJsonObject("error").get("code").getAsString());
     }
 
-    @Test void providersAreNamespacedAndPermissioned() throws Exception {
+    // ---- actions ----
+
+    @Test void actionReturnsWhatTheHandlerReturned() throws Exception {
+        JsonObject ok = obj(exec(full, "test.echo", "{\"text\":\"hi\"}"));
+        assertTrue(ok.get("success").getAsBoolean());
+        assertEquals("test.echo", ok.get("action").getAsString());
+        assertEquals("hi", ok.getAsJsonObject("result").get("text").getAsString());
+        var bad = exec(full, "test.fail", "{}");
+        assertEquals(409, bad.statusCode());
+        assertEquals("ACTION_UNAVAILABLE", obj(bad).getAsJsonObject("error").get("code").getAsString());
+    }
+
+    @Test void validation() throws Exception {
+        assertEquals(400, exec(full, "test.echo", "{}").statusCode());
+        assertEquals(400, exec(full, "test.echo", "{\"text\":1}").statusCode());
+        assertEquals(400, exec(full, "test.echo", "{\"text\":\"a\",\"x\":1}").statusCode());
+        assertEquals(400, exec(full, "test.enum", "{\"shape\":\"c\"}").statusCode());
+        assertEquals(200, exec(full, "test.enum", "{\"shape\":\"a\"}").statusCode());
+        assertEquals(404, call("POST", "/actions/execute", "{\"action\":\"nope\"}", full).statusCode());
+        assertEquals(400, call("POST", "/actions/execute", "not json", full).statusCode());
+        assertEquals(400, call("POST", "/actions/execute", "{\"action\":{}}", full).statusCode());
+        assertEquals(400, call("POST", "/actions/execute", "{\"action\":\"test.count\",\"parameters\":\"x\"}", full).statusCode());
+    }
+
+    @Test void controlBlockRefusesActionsButNotReads() throws Exception {
+        ctx.controlBlock = () -> "Control is disabled on multiplayer servers";
+        try {
+            var r = exec(full, "test.echo", "{\"text\":\"hi\"}");
+            assertEquals(409, r.statusCode());
+            assertEquals("ACTION_UNAVAILABLE", obj(r).getAsJsonObject("error").get("code").getAsString());
+            assertEquals(200, call("GET", "/resources/test.info", null, full).statusCode());
+        } finally {
+            ctx.controlBlock = () -> null;
+        }
+        assertEquals(200, exec(full, "test.echo", "{\"text\":\"hi\"}").statusCode());
+    }
+
+    @Test void aTimedOutRequestNeverRunsLater() throws Exception {
+        counter.set(0);
+        deferTasks = true;
+        try {
+            var r = exec(full, "test.count", "{}");
+            assertEquals(503, r.statusCode());
+            assertEquals("GAME_THREAD_BUSY", obj(r).getAsJsonObject("error").get("code").getAsString());
+        } finally {
+            deferTasks = false;
+        }
+        assertEquals(1, deferred.size());
+        deferred.forEach(Runnable::run); // the game thread finally catches up
+        deferred.clear();
+        assertEquals(0, counter.get(), "the abandoned action must not have run");
+        assertEquals(200, exec(full, "test.count", "{}").statusCode());
+        assertEquals(1, counter.get());
+    }
+
+    // ---- tokens ----
+
+    @Test void tokensPersistAndRotate() throws Exception {
+        Path a = tmp.resolve("p-full"), b = tmp.resolve("p-read");
+        Tokens t1 = Tokens.loadOrCreate(a, b);
+        String f1 = Files.readString(a).trim(), r1 = Files.readString(b).trim();
+        assertNotEquals(f1, r1);
+        assertEquals(Tokens.Access.FULL, t1.authenticate(f1).orElseThrow());
+        assertEquals(Tokens.Access.READ, t1.authenticate(r1).orElseThrow());
+        assertTrue(t1.authenticate("nope").isEmpty());
+        assertTrue(t1.authenticate(null).isEmpty());
+
+        Tokens t2 = Tokens.loadOrCreate(a, b); // "restart": same secrets
+        assertEquals(Tokens.Access.FULL, t2.authenticate(f1).orElseThrow());
+
+        t2.regenerate();
+        assertTrue(t2.authenticate(f1).isEmpty());
+        assertTrue(t2.authenticate(r1).isEmpty());
+        assertNotEquals(f1, Files.readString(a).trim());
+        assertEquals(Tokens.Access.FULL, t2.authenticate(Files.readString(a).trim()).orElseThrow());
+
+        Files.writeString(b, Files.readString(a)); // same secret in both files is repaired
+        Tokens t3 = Tokens.loadOrCreate(a, b);
+        assertNotEquals(Files.readString(a).trim(), Files.readString(b).trim());
+        assertEquals(Tokens.Access.FULL, t3.authenticate(Files.readString(a).trim()).orElseThrow());
+        try {
+            assertEquals("rw-------", java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(a)));
+        } catch (UnsupportedOperationException ignored) {
+        }
+    }
+
+    // ---- providers / helpers ----
+
+    @Test void providersAreNamespaced() throws Exception {
         assertTrue(ctx.install(new ResourceProvider() {
             public String modId() { return "examplemod"; }
             public void register(ApiRegistrar r) {
@@ -232,8 +223,8 @@ class ApiServerTest {
                 r.register(r.action("ping", "Ping").handler(p -> "pong"));
             }
         }));
-        assertEquals(200, call("GET", "/resources/examplemod.machines", null, reader).statusCode());
-        assertEquals(200, exec(controller, "examplemod.ping", "{}").statusCode());
+        assertEquals(200, call("GET", "/resources/examplemod.machines", null, read).statusCode());
+        assertEquals(200, exec(full, "examplemod.ping", "{}").statusCode());
         assertFalse(ctx.install(new ResourceProvider() {
             public String modId() { return "bad"; }
             public void register(ApiRegistrar r) { throw new IllegalStateException("boom"); }
@@ -243,73 +234,24 @@ class ApiServerTest {
 
     @Test void pagination() {
         var all = java.util.stream.IntStream.range(0, 25).boxed().toList();
-        var obj = new com.google.gson.JsonObject();
-        obj.addProperty("limit", 10);
-        obj.addProperty("offset", 20);
-        Page<Integer> p = Page.of(all, new Params(obj), 5, 100);
+        var o = new JsonObject();
+        o.addProperty("limit", 10);
+        o.addProperty("offset", 20);
+        Page<Integer> p = Page.of(all, new Params(o), 5, 100);
         assertEquals(5, p.items().size());
         assertNull(p.nextOffset());
-        assertEquals(10, Page.of(all, new Params(obj), 5, 100).limit());
-    }
-
-    @Test void controlBlockRefusesControlButNotReads() throws Exception {
-        ctx.controlBlock = () -> "Control is disabled on multiplayer servers";
-        try {
-            var r = exec(controller, "test.echo", "{\"text\":\"hi\"}");
-            assertEquals(409, r.statusCode());
-            assertEquals("ACTION_UNAVAILABLE", obj(r).getAsJsonObject("error").get("code").getAsString());
-            assertEquals(200, call("GET", "/resources/test.info", null, reader).statusCode());
-            // batch (concurrent) reports per-item failure
-            var b = obj(call("POST", "/actions/batch", "{\"mode\":\"concurrent\",\"actions\":[{\"action\":\"test.echo\",\"parameters\":{\"text\":\"a\"}}]}", controller));
-            assertFalse(b.getAsJsonArray("results").get(0).getAsJsonObject().get("success").getAsBoolean());
-        } finally {
-            ctx.controlBlock = () -> null;
-        }
-        assertEquals(200, exec(controller, "test.echo", "{\"text\":\"hi\"}").statusCode());
-    }
-
-    @Test void delayedControlActionIsRecheckedWhenItRuns() throws Exception {
-        var r = call("POST", "/actions/execute", "{\"action\":\"test.echo\",\"parameters\":{\"text\":\"x\"},\"delayTicks\":1}", controller);
-        String id = obj(r).getAsJsonObject("result").get("operationId").getAsString();
-        ctx.controlBlock = () -> "blocked now";
-        try {
-            ctx.operations.tick(); ctx.operations.tick();
-        } finally {
-            ctx.controlBlock = () -> null;
-        }
-        assertEquals("failed", status(controller, id));
-    }
-
-    @Test void cancelAllStopsRunningOperations() throws Exception {
-        String id = startOp(controller, "test.forever");
-        assertTrue(ctx.operations.cancelAll() >= 1);
-        assertEquals("cancelled", status(controller, id));
-    }
-
-    @Test void infoEndpointsNeedReadPermission() throws Exception {
-        String none = tokens.create("none", Set.of()).secret();
-        for (String p : new String[]{"/mods", "/capabilities", "/schema", "/openapi.json"})
-            assertEquals(403, call("GET", p, null, none).statusCode(), p);
-        assertEquals(200, call("GET", "/actions", null, none).statusCode()); // discovery shows what is permitted
-        assertEquals(200, call("GET", "/mods", null, reader).statusCode());
-    }
-
-    @Test void everyBatchStepIsAudited() throws Exception {
-        String body = "{\"mode\":\"concurrent\",\"actions\":[{\"action\":\"test.echo\",\"parameters\":{\"text\":\"audit-me-1\"}},{\"action\":\"test.echo\",\"parameters\":{\"text\":\"audit-me-2\"}}]}";
-        assertEquals(200, call("POST", "/actions/batch", body, controller).statusCode());
-        String log = call("GET", "/admin/audit", null, admin).body();
-        assertTrue(log.contains("audit-me-1") && log.contains("audit-me-2"));
+        assertEquals(10, p.limit());
     }
 
     @Test void chatTextValidation() {
         assertEquals("hello", Validation.chatText("hello"));
-        for (String bad : new String[]{"", "  ", "/op me", "a\nb", "x\u00a7cred", "z".repeat(257)})
+        for (String bad : new String[]{"", "  ", "/op me", "a\nb", "x§cred", "z".repeat(257)})
             assertThrows(ApiException.class, () -> Validation.chatText(bad), bad);
         assertEquals(256, Validation.chatText("z".repeat(256)).length());
     }
 
     @Test void commandAllowlist() {
-        Set<String> allowed = Set.of("goto", "cancel");
+        java.util.Set<String> allowed = java.util.Set.of("goto", "cancel");
         assertEquals("goto 1 2 3", Validation.commandLine("  GOTO 1 2 3 ", allowed).toLowerCase());
         assertThrows(ApiException.class, () -> Validation.commandLine("set allowBreak true", allowed));
         assertThrows(ApiException.class, () -> Validation.commandLine("goto 1\nset x", allowed));
@@ -325,9 +267,8 @@ class ApiServerTest {
         for (String bad : new String[]{"../x.schem", "a/b.schem", "a\\b.schem", "x.txt", "..schem", "", "/etc/passwd.nbt", "a b.schem"})
             assertThrows(ApiException.class, () -> Validation.schematicName(bad), bad);
         assertEquals(27, Validation.boxVolume(0, 0, 0, 2, 2, 2, 100));
-        assertEquals(27, Validation.boxVolume(2, 2, 2, 0, 0, 0, 100)); // corner order doesn't matter
+        assertEquals(27, Validation.boxVolume(2, 2, 2, 0, 0, 0, 100));
         assertThrows(ApiException.class, () -> Validation.boxVolume(0, 0, 0, 99, 99, 99, 1000));
         assertThrows(ApiException.class, () -> Validation.boxVolume(0, 0, 0, Integer.MAX_VALUE, 0, 0, Long.MAX_VALUE));
-        assertTrue(tokens.create("builder", Set.of("control.build")).secret().length() > 10);
     }
 }

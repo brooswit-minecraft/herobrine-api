@@ -14,7 +14,7 @@ final class ClientConfig {
 
     static {
         ModConfigSpec.Builder b = new ModConfigSpec.Builder();
-        ENABLED = b.comment("Run the HTTP API. Toggle in-game with /herobrine_api on|off.")
+        ENABLED = b.comment("Run the HTTP API. Toggle in-game with /herobrine_api on|off; rotate tokens with /herobrine_api regenerate.")
                 .define("enabled", true);
         PORT = b.comment("Loopback port for the HTTP API (127.0.0.1 only).")
                 .defineInRange("port", 25580, 1024, 65535);

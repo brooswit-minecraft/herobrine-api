@@ -1,6 +1,5 @@
 package dev.herobrine.api.core;
 
-import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -14,10 +13,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
@@ -26,22 +23,22 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Embedded HTTP server. Defaults to loopback-only; every request needs a scoped bearer token.
- * All game-state access is marshalled through {@link GameThread}.
+ * Embedded HTTP server. Loopback-only by default. Two bearer tokens: FULL (read + actions) and READ
+ * (read only). It keeps no per-request state: reads return what the game says now, actions do the
+ * thing and return what it returned.
  */
 public final class ApiServer {
     private static final String P = "/api/v1";
 
     private final ApiContext ctx;
-    private final TokenStore tokens;
+    private final Tokens tokens;
     private final Limits limits;
     private final Semaphore concurrent;
     private final AtomicInteger eventStreams = new AtomicInteger();
-    private final Map<String, long[]> rateWindows = new ConcurrentHashMap<>(); // token id -> {second, count}
     private boolean loopbackOnly = true;
     private HttpServer http;
 
-    public ApiServer(ApiContext ctx, TokenStore tokens, Limits limits) {
+    public ApiServer(ApiContext ctx, Tokens tokens, Limits limits) {
         this.ctx = ctx;
         this.tokens = tokens;
         this.limits = limits;
@@ -51,7 +48,7 @@ public final class ApiServer {
     /** Loopback only. */
     public int start(int port) throws IOException { return start(InetAddress.getLoopbackAddress(), port); }
 
-    /** Binding to a non-loopback address is an explicit opt-in to remote access (spec 12.1/12.4). */
+    /** Binding to a non-loopback address is an explicit opt-in to remote access. */
     public int start(InetAddress bind, int port) throws IOException {
         loopbackOnly = bind.isLoopbackAddress();
         http = HttpServer.create(new InetSocketAddress(bind, port), 0);
@@ -73,14 +70,13 @@ public final class ApiServer {
         boolean acquired = false;
         try {
             if (loopbackOnly && !hostIsLocal(ex)) throw new ApiException(403, "PERMISSION_DENIED", "Unexpected Host header");
-            TokenStore.Token token = authenticate(ex);
-            enforceRate(token);
+            Tokens.Access access = authenticate(ex);
             boolean isStream = ex.getRequestURI().getPath().equals(P + "/events/stream");
             if (!isStream) {
                 if (!concurrent.tryAcquire()) throw new ApiException(429, "RATE_LIMITED", "Too many concurrent requests");
                 acquired = true;
             }
-            route(ex, token, ex.getRequestMethod(), ex.getRequestURI().getPath());
+            route(ex, access, ex.getRequestMethod(), ex.getRequestURI().getPath());
         } catch (ApiException e) {
             error(ex, e.status, e.code, e.getMessage());
         } catch (Exception e) {
@@ -98,7 +94,7 @@ public final class ApiServer {
         return host.equals("127.0.0.1") || host.equals("localhost") || host.equals("[::1]");
     }
 
-    private TokenStore.Token authenticate(HttpExchange ex) {
+    private Tokens.Access authenticate(HttpExchange ex) {
         String h = ex.getRequestHeaders().getFirst("Authorization");
         if (h == null || !h.startsWith("Bearer "))
             throw new ApiException(401, "UNAUTHORIZED", "Missing or invalid bearer token");
@@ -106,49 +102,23 @@ public final class ApiServer {
                 .orElseThrow(() -> new ApiException(401, "UNAUTHORIZED", "Missing or invalid bearer token"));
     }
 
-    private void enforceRate(TokenStore.Token t) {
-        long sec = System.currentTimeMillis() / 1000;
-        long[] w = rateWindows.computeIfAbsent(t.id(), k -> new long[2]);
-        synchronized (w) {
-            if (w[0] != sec) { w[0] = sec; w[1] = 0; }
-            if (++w[1] > limits.maxRequestsPerSecondPerToken())
-                throw new ApiException(429, "RATE_LIMITED", "Rate limit exceeded");
-        }
-    }
-
-    private static void require(TokenStore.Token t, String permission) {
-        if (!t.allows(permission)) throw new ApiException(403, "PERMISSION_DENIED", "Token lacks permission '" + permission + "'");
-    }
-
-    private void route(HttpExchange ex, TokenStore.Token tok, String method, String path) throws Exception {
+    private void route(HttpExchange ex, Tokens.Access access, String method, String path) throws Exception {
         if (!path.equals(P) && !path.startsWith(P + "/")) throw ApiException.notFound("Unknown path " + path);
         String rest = path.substring(P.length());
         switch (rest.isEmpty() ? "/" : rest) {
             case "/" -> { need(method, "GET"); json(ex, 200, index()); }
-            case "/resources" -> { need(method, "GET"); json(ex, 200, listResources(tok)); }
-            case "/actions" -> { need(method, "GET"); json(ex, 200, listActions(tok)); }
+            case "/resources" -> { need(method, "GET"); json(ex, 200, listResources()); }
+            case "/actions" -> { need(method, "GET"); json(ex, 200, listActions(access)); }
             case "/events" -> { need(method, "GET"); json(ex, 200, Json.GSON.toJsonTree(ctx.events.knownTypes())); }
-            case "/events/stream" -> { need(method, "GET"); require(tok, "read.client"); stream(ex); }
-            case "/capabilities" -> { need(method, "GET"); require(tok, "read.client"); json(ex, 200, onGameThread(() -> Json.GSON.toJsonTree(ctx.capabilitiesDocument()))); }
-            case "/mods" -> { need(method, "GET"); require(tok, "read.client"); json(ex, 200, onGameThread(() -> Json.GSON.toJsonTree(ctx.mods.get()))); }
-            case "/schema" -> { need(method, "GET"); require(tok, "read.client"); json(ex, 200, schemas()); }
-            case "/openapi.json" -> { need(method, "GET"); require(tok, "read.client"); json(ex, 200, OpenApi.document(ctx)); }
-            case "/actions/execute" -> { need(method, "POST"); execute(ex, tok); }
-            case "/actions/batch" -> { need(method, "POST"); batch(ex, tok); }
-            case "/operations" -> { need(method, "GET"); listOperations(ex, tok); }
-            case "/admin/tokens" -> adminTokens(ex, tok, method);
-            case "/admin/audit" -> { need(method, "GET"); require(tok, "admin.api"); json(ex, 200, Json.GSON.toJsonTree(ctx.audit.recent())); }
+            case "/events/stream" -> { need(method, "GET"); stream(ex); }
+            case "/capabilities" -> { need(method, "GET"); json(ex, 200, onGameThread(() -> Json.GSON.toJsonTree(ctx.capabilitiesDocument()))); }
+            case "/mods" -> { need(method, "GET"); json(ex, 200, onGameThread(() -> Json.GSON.toJsonTree(ctx.mods.get()))); }
+            case "/schema" -> { need(method, "GET"); json(ex, 200, schemas()); }
+            case "/openapi.json" -> { need(method, "GET"); json(ex, 200, OpenApi.document(ctx)); }
+            case "/actions/execute" -> { need(method, "POST"); execute(ex, access); }
             default -> {
-                if (rest.startsWith("/resources/")) { need(method, "GET"); resource(ex, tok, rest.substring("/resources/".length())); }
-                else if (rest.startsWith("/operations/")) operation(ex, tok, method, rest.substring("/operations/".length()));
-                else if (rest.startsWith("/admin/tokens/")) {
-                    need(method, "DELETE");
-                    require(tok, "admin.api");
-                    String id = rest.substring("/admin/tokens/".length());
-                    if (!tokens.revoke(id)) throw ApiException.notFound("Unknown token " + id);
-                    ctx.audit.record(tok.id(), "admin", "revoked token " + id);
-                    json(ex, 200, ok(Map.of("revoked", id)));
-                } else throw ApiException.notFound("Unknown path " + path);
+                if (rest.startsWith("/resources/")) { need(method, "GET"); resource(ex, rest.substring("/resources/".length())); }
+                else throw ApiException.notFound("Unknown path " + path);
             }
         }
     }
@@ -165,36 +135,32 @@ public final class ApiServer {
         o.addProperty("version", "0.1.0");
         o.addProperty("platform", ctx.platform);
         JsonObject l = new JsonObject();
-        for (String s : List.of("resources", "actions", "actions/execute", "actions/batch", "operations", "events", "events/stream",
+        for (String s : List.of("resources", "actions", "actions/execute", "events", "events/stream",
                 "capabilities", "mods", "schema", "openapi.json"))
             l.addProperty(s, P + "/" + s);
         o.add("links", l);
         return o;
     }
 
-    private JsonObject listResources(TokenStore.Token t) {
+    private JsonObject listResources() {
         JsonObject o = new JsonObject();
         for (ResourceDef r : sorted(ctx.resources.all(), ResourceDef::id)) {
             JsonObject e = new JsonObject();
             e.addProperty("description", r.description());
             e.addProperty("availability", r.availability().name());
-            e.addProperty("permission", r.permission());
-            e.addProperty("permitted", t.allows(r.permission()));
             e.addProperty("href", P + "/resources/" + r.id());
             o.add(r.id(), e);
         }
         return o;
     }
 
-    private JsonObject listActions(TokenStore.Token t) {
+    private JsonObject listActions(Tokens.Access access) {
         JsonObject o = new JsonObject();
         for (ActionDef a : sorted(ctx.actions.all(), ActionDef::name)) {
             JsonObject e = new JsonObject();
             e.addProperty("description", a.description());
             e.addProperty("availability", a.availability().name());
-            e.addProperty("permission", a.permission());
-            e.addProperty("permitted", t.allows(a.permission()));
-            e.add("locks", Json.GSON.toJsonTree(a.locks()));
+            e.addProperty("permitted", access == Tokens.Access.FULL);
             e.add("parameters", OpenApi.actionSchema(a));
             o.add(a.name(), e);
         }
@@ -209,119 +175,51 @@ public final class ApiServer {
 
     // ---- resources ----
 
-    private void resource(HttpExchange ex, TokenStore.Token tok, String id) throws Exception {
+    private void resource(HttpExchange ex, String id) throws Exception {
         ResourceDef r = ctx.resources.get(id);
         if (r == null) throw ApiException.notFound("Unknown resource " + id);
-        require(tok, r.permission());
         Params q = new Params(queryParams(ex));
-        JsonElement value = onGameThread(() -> Json.GSON.toJsonTree(r.supplier().apply(q)));
-        JsonObject o = new JsonObject();
-        o.addProperty("success", true);
-        o.addProperty("resource", id);
-        o.addProperty("availability", r.availability().name());
-        o.addProperty("source", "client");
-        long tick = ctx.observedTick.getAsLong();
-        if (tick >= 0) o.addProperty("observedTick", tick);
-        o.add("value", value);
-        json(ex, 200, o);
+        // The tick is read in the same game-thread task as the value, so they describe the same moment.
+        JsonObject res = onGameThread(() -> {
+            JsonObject o = new JsonObject();
+            o.addProperty("success", true);
+            o.addProperty("resource", id);
+            o.addProperty("availability", r.availability().name());
+            o.addProperty("source", "client");
+            long tick = ctx.observedTick.getAsLong();
+            if (tick >= 0) o.addProperty("observedTick", tick);
+            o.add("value", Json.GSON.toJsonTree(r.supplier().apply(q)));
+            return o;
+        });
+        json(ex, 200, res);
     }
 
     // ---- actions ----
 
-    private ActionDef lookup(JsonObject body, TokenStore.Token tok) {
-        if (!body.has("action")) throw ApiException.badRequest("Missing 'action'");
+    private void execute(HttpExchange ex, Tokens.Access access) throws Exception {
+        if (access != Tokens.Access.FULL)
+            throw new ApiException(403, "PERMISSION_DENIED", "This token is read-only; use the full-control token to run actions");
+        JsonObject body = readBody(ex);
+        if (!body.has("action") || !body.get("action").isJsonPrimitive()) throw ApiException.badRequest("Missing 'action'");
         String name = body.get("action").getAsString();
         ActionDef a = ctx.actions.get(name);
         if (a == null) throw ApiException.notFound("Unknown action " + name);
-        require(tok, a.permission());
-        return a;
-    }
-
-    private static JsonObject argsOf(JsonObject body) {
-        return body.has("parameters") && body.get("parameters").isJsonObject() ? body.getAsJsonObject("parameters") : new JsonObject();
-    }
-
-    private static int intField(JsonObject o, String k, int def) {
-        try { return o.has(k) ? o.get(k).getAsInt() : def; }
-        catch (RuntimeException e) { throw ApiException.badRequest("'" + k + "' must be a number"); }
-    }
-
-    private JsonObject outcomeJson(String action, ActionExecutor.Outcome out) {
-        JsonObject o = new JsonObject();
-        o.addProperty("success", true);
-        o.addProperty("action", action);
-        o.addProperty("stage", out.stage().name());
-        if (out.op() != null) {
-            JsonObject h = new JsonObject();
-            h.addProperty("operationId", out.op().id);
-            h.addProperty("status", out.op().state.name().toLowerCase());
-            h.addProperty("action", action);
-            h.addProperty("href", P + "/operations/" + out.op().id);
-            o.add("result", h);
-        } else o.add("result", Json.GSON.toJsonTree(out.result()));
-        return o;
-    }
-
-    private void execute(HttpExchange ex, TokenStore.Token tok) throws Exception {
-        JsonObject body = readBody(ex);
-        ActionDef a = lookup(body, tok);
-        JsonObject args = argsOf(body);
-        validate(a, args);
-        int delay = intField(body, "delayTicks", 0);
-        long timeout = intField(body, "timeoutMs", 0);
-        if (delay < 0) throw ApiException.badRequest("'delayTicks' must be >= 0");
-        Params p = new Params(args);
-        ctx.audit.record(tok.id(), "action", a.name() + " " + args);
-        JsonObject res = onGameThread(() -> outcomeJson(a.name(), ctx.executor.run(a, p, tok.id(), delay, timeout)));
-        json(ex, 200, res);
-    }
-
-    private void batch(HttpExchange ex, TokenStore.Token tok) throws Exception {
-        JsonObject body = readBody(ex);
-        if (!body.has("actions") || !body.get("actions").isJsonArray()) throw ApiException.badRequest("Missing 'actions' array");
-        JsonArray arr = body.getAsJsonArray("actions");
-        if (arr.size() > limits.maxBatchSize()) throw ApiException.badRequest("Batch exceeds " + limits.maxBatchSize() + " actions");
-        String mode = body.has("mode") ? body.get("mode").getAsString() : "sequential";
-        if (!mode.equals("sequential") && !mode.equals("concurrent")) throw ApiException.badRequest("'mode' must be sequential or concurrent");
-        boolean stopOnError = !body.has("stopOnError") || body.get("stopOnError").getAsBoolean();
-        long timeout = intField(body, "timeoutMs", 0);
-
-        List<ActionExecutor.Step> steps = new ArrayList<>();
-        for (JsonElement e : arr) {
-            if (!e.isJsonObject()) throw ApiException.badRequest("Each batch entry must be an object");
-            JsonObject item = e.getAsJsonObject();
-            ActionDef a = lookup(item, tok);
-            validate(a, argsOf(item));
-            steps.add(new ActionExecutor.Step(a, new Params(argsOf(item)), Math.max(0, intField(item, "delayTicks", 0))));
+        JsonObject args = new JsonObject();
+        if (body.has("parameters")) {
+            if (!body.get("parameters").isJsonObject()) throw ApiException.badRequest("'parameters' must be an object");
+            args = body.getAsJsonObject("parameters");
         }
-        ctx.audit.record(tok.id(), "batch", mode + " x" + steps.size());
-        for (ActionExecutor.Step st : steps)
-            ctx.audit.record(tok.id(), "action", st.action().name() + " " + st.params().raw() + " (batch)");
-
+        validate(a, args);
+        Params p = new Params(args);
+        ctx.log.accept("action " + name + " " + args);
         JsonObject res = onGameThread(() -> {
+            String blocked = ctx.controlBlock.get();
+            if (blocked != null) throw ApiException.unavailable(blocked);
+            Object result = a.handler().apply(p);
             JsonObject o = new JsonObject();
             o.addProperty("success", true);
-            o.addProperty("mode", mode);
-            if (mode.equals("sequential")) {
-                Operations.Op op = ctx.executor.runSequence(steps, tok.id(), timeout, stopOnError);
-                o.addProperty("stage", Stage.ACCEPTED.name());
-                JsonObject h = new JsonObject();
-                h.addProperty("operationId", op.id);
-                h.addProperty("status", "running");
-                h.addProperty("href", P + "/operations/" + op.id);
-                o.add("result", h);
-            } else {
-                JsonArray results = new JsonArray();
-                for (ActionExecutor.Step s : steps) {
-                    try {
-                        results.add(outcomeJson(s.action().name(),
-                                ctx.executor.run(s.action(), s.params(), tok.id(), s.delayTicks(), timeout)));
-                    } catch (ApiException | IllegalStateException e) {
-                        results.add(failure(s.action().name(), e instanceof ApiException ae ? ae.code : "ACTION_FAILED", e.getMessage()));
-                    }
-                }
-                o.add("results", results);
-            }
+            o.addProperty("action", name);
+            o.add("result", Json.GSON.toJsonTree(result));
             return o;
         });
         json(ex, 200, res);
@@ -352,76 +250,6 @@ public final class ApiServer {
             case "array" -> e.isJsonArray();
             default -> true;
         };
-    }
-
-    // ---- operations ----
-
-    private JsonObject describe(Operations.Op op) {
-        JsonObject o = new JsonObject();
-        o.addProperty("operationId", op.id);
-        o.addProperty("action", op.action);
-        o.addProperty("owner", op.owner);
-        o.addProperty("status", op.state.name().toLowerCase());
-        o.addProperty("createdAt", op.createdAtMillis);
-        if (op.finishedAtMillis != 0) o.addProperty("finishedAt", op.finishedAtMillis);
-        if (op.progress != null) o.add("progress", Json.GSON.toJsonTree(op.progress));
-        if (op.result != null) o.add("result", Json.GSON.toJsonTree(ActionExecutor.unwrap(op.result)));
-        if (op.error != null) o.addProperty("error", op.error);
-        o.addProperty("href", P + "/operations/" + op.id);
-        return o;
-    }
-
-    private void listOperations(HttpExchange ex, TokenStore.Token tok) throws IOException {
-        boolean admin = tok.allows("admin.api");
-        Params q = new Params(queryParams(ex));
-        String status = q.string("status", null);
-        List<JsonObject> list = new ArrayList<>();
-        for (Operations.Op op : ctx.operations.list()) {
-            if (!admin && !op.owner.equals(tok.id())) continue;
-            if (status != null && !op.state.name().equalsIgnoreCase(status)) continue;
-            list.add(describe(op));
-        }
-        Page<JsonObject> page = Page.of(list, q, 100, limits.maxPageSize());
-        json(ex, 200, Json.GSON.toJsonTree(page));
-    }
-
-    private void operation(HttpExchange ex, TokenStore.Token tok, String method, String rest) throws Exception {
-        boolean cancel = rest.endsWith("/cancel");
-        String id = cancel ? rest.substring(0, rest.length() - "/cancel".length()) : rest;
-        Operations.Op op = ctx.operations.get(id);
-        if (op == null) throw ApiException.notFound("Unknown operation " + id);
-        if (!op.owner.equals(tok.id()) && !tok.allows("admin.api"))
-            throw new ApiException(403, "PERMISSION_DENIED", "Operation belongs to another controller");
-        if (cancel || method.equals("DELETE")) {
-            if (cancel) need(method, "POST");
-            ctx.audit.record(tok.id(), "cancel", id);
-            onGameThread(() -> Json.GSON.toJsonTree(ctx.operations.cancel(id)));
-        } else need(method, "GET");
-        JsonObject o = describe(op);
-        o.addProperty("success", true);
-        json(ex, 200, o);
-    }
-
-    // ---- admin ----
-
-    private void adminTokens(HttpExchange ex, TokenStore.Token tok, String method) throws IOException {
-        require(tok, "admin.api");
-        if (method.equals("GET")) {
-            json(ex, 200, Json.GSON.toJsonTree(tokens.list()));
-        } else if (method.equals("POST")) {
-            JsonObject b = readBody(ex);
-            if (!b.has("name") || !b.has("permissions") || !b.get("permissions").isJsonArray())
-                throw ApiException.badRequest("Need 'name' and 'permissions' (array)");
-            Set<String> perms = new HashSet<>();
-            b.getAsJsonArray("permissions").forEach(e -> perms.add(e.getAsString()));
-            TokenStore.Created c = tokens.create(b.get("name").getAsString(), perms);
-            ctx.audit.record(tok.id(), "admin", "created token " + c.token().id() + " " + perms);
-            JsonObject o = new JsonObject();
-            o.addProperty("success", true);
-            o.add("token", Json.GSON.toJsonTree(c.token()));
-            o.addProperty("secret", c.secret()); // shown once
-            json(ex, 200, o);
-        } else throw new ApiException(405, "METHOD_NOT_ALLOWED", "Use GET or POST");
     }
 
     // ---- events ----
@@ -465,9 +293,19 @@ public final class ApiServer {
 
     // ---- helpers ----
 
+    /**
+     * Runs the task on the game thread and waits. If the game thread picks the task up after this
+     * request has already timed out, the task refuses to run, so a 503 means "nothing was done".
+     */
     private <T extends JsonElement> T onGameThread(Callable<T> task) throws Exception {
+        long timeoutMs = limits.gameThreadTimeoutMs();
+        long deadline = System.nanoTime() + timeoutMs * 1_000_000L;
         try {
-            return ctx.gameThread.submit(task).get(limits.gameThreadTimeoutMs(), TimeUnit.MILLISECONDS);
+            return ctx.gameThread.submit(() -> {
+                if (System.nanoTime() > deadline)
+                    throw new ApiException(503, "GAME_THREAD_BUSY", "Request expired before the game thread ran it; nothing was done");
+                return task.call();
+            }).get(timeoutMs, TimeUnit.MILLISECONDS);
         } catch (ExecutionException e) {
             if (e.getCause() instanceof ApiException ae) throw ae;
             throw new ApiException(500, "ACTION_FAILED", String.valueOf(e.getCause()));
@@ -476,17 +314,9 @@ public final class ApiServer {
         }
     }
 
-    private static JsonObject ok(Object result) {
-        JsonObject o = new JsonObject();
-        o.addProperty("success", true);
-        o.add("result", Json.GSON.toJsonTree(result));
-        return o;
-    }
-
-    private static JsonObject failure(String action, String code, String msg) {
+    private static JsonObject failure(String code, String msg) {
         JsonObject o = new JsonObject();
         o.addProperty("success", false);
-        if (action != null) o.addProperty("action", action);
         JsonObject e = new JsonObject();
         e.addProperty("code", code);
         e.addProperty("message", msg);
@@ -539,7 +369,7 @@ public final class ApiServer {
     }
 
     private void error(HttpExchange ex, int status, String code, String msg) throws IOException {
-        write(ex, status, Json.GSON.toJson(failure(null, code, msg)).getBytes(StandardCharsets.UTF_8));
+        write(ex, status, Json.GSON.toJson(failure(code, msg)).getBytes(StandardCharsets.UTF_8));
     }
 
     private static void write(HttpExchange ex, int status, byte[] b) throws IOException {

@@ -9,7 +9,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicInteger;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
@@ -22,8 +21,9 @@ import net.minecraft.world.entity.player.Player;
  * unavailable when Baritone is absent. Actions call Baritone's typed Java API through
  * {@link BaritoneAdapter}; Baritone's command manager is used only for operations the installed
  * build's API does not provide (or has no typed equivalent, e.g. pause/resume/repath, sel fill).
- * Navigation becomes an operation that can be polled and cancelled, and finishes with a real outcome
- * taken from Baritone's path events.
+ * Actions start the Baritone process and return at once; progress is visible through baritone.status,
+ * baritone.path and the `baritone.path_event` event stream (AT_GOAL, CALC_FAILED, CANCELED, ...), and
+ * baritone.cancel stops it - the same shape as Baritone's own API.
  */
 final class BaritoneBindings {
     private BaritoneBindings() {}
@@ -31,9 +31,6 @@ final class BaritoneBindings {
     private static final BaritoneAdapter A = new ReflectiveBaritone(
             BaritoneBindings.class.getClassLoader(), c -> new BlockPos(c[0], c[1], c[2]));
 
-    private static final String LOCK = "player.movement";
-    /** Bumped for every new navigation task, so a preempted task doesn't cancel its successor's path. */
-    private static final AtomicInteger GENERATION = new AtomicInteger();
     /** Verbs accepted by baritone.command. Excludes `set` (use set_setting) and `sel`/`build`/file commands (typed actions below). */
     private static final Set<String> ALLOWED_VERBS = Set.of(
             "goto", "follow", "explore", "mine", "farm", "thisway", "tunnel", "come", "surface", "axis",
@@ -51,30 +48,30 @@ final class BaritoneBindings {
         });
 
         ctx.resources.register("baritone.status", new ResourceDef("baritone.status",
-                "Baritone availability, current goal/process, and recent path events", Availability.LOCAL, "read.world", q -> {
+                "Baritone availability, current goal/process, and the latest path event", Availability.LOCAL, q -> {
                     if (!A.installed()) return Unavailable.of("baritone", Reason.MOD_NOT_INSTALLED);
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("installed", true);
                     m.put("pathing", A.isPathing());
                     m.put("goal", A.goal());
                     m.put("process", A.activeProcess());
-                    m.put("recentEvents", A.eventsAfter(Math.max(0, A.eventSeq() - 10)));
+                    m.put("lastPathEvent", A.lastPathEvent());
                     return m;
                 }));
         ctx.resources.register("baritone.path", new ResourceDef("baritone.path",
-                "Current path nodes (capped at 1000)", Availability.LOCAL, "read.world", q -> {
+                "Current path nodes (capped at 1000)", Availability.LOCAL, q -> {
                     if (!A.installed()) return Unavailable.of("baritone.path", Reason.MOD_NOT_INSTALLED);
                     List<int[]> nodes = A.pathNodes(1000);
                     return Map.of("nodeCount", nodes.size(), "nodes", nodes);
                 }));
         ctx.resources.register("baritone.settings", new ResourceDef("baritone.settings",
                 "All Baritone settings of the installed build. Params: offset, limit",
-                Availability.LOCAL, "read.client", q -> {
+                Availability.LOCAL, q -> {
                     if (!A.installed()) return Unavailable.of("baritone.settings", Reason.MOD_NOT_INSTALLED);
                     return Page.of(A.settings(), q, 200, 1000);
                 }));
 
-        process(ctx, "control.mods", "baritone.goto", "Pathfind to coordinates (y optional)", b -> b
+        act(ctx, "baritone.goto", "Pathfind to coordinates (y optional)", b -> b
                 .param(ParamDef.required("x", "integer", "Block X"))
                 .param(ParamDef.optional("y", "integer", "Block Y", null))
                 .param(ParamDef.required("z", "integer", "Block Z")),
@@ -86,20 +83,20 @@ final class BaritoneBindings {
                     }
                     return () -> typedOr(() -> A.gotoXZ(x, z), "goto " + x + " " + z);
                 });
-        process(ctx, "control.mods", "baritone.goto_block", "Pathfind to the nearest known block of a type", b -> b
+        act(ctx, "baritone.goto_block", "Pathfind to the nearest known block of a type", b -> b
                 .param(ParamDef.required("block", "string", "Block id, e.g. minecraft:crafting_table")),
                 p -> {
                     String id = Validation.resourceId(p.string("block"));
                     return () -> typedOr(() -> A.gotoBlock(id), "goto " + id);
                 });
-        process(ctx, "control.mods", "baritone.follow_player", "Follow a player by name", b -> b
+        act(ctx, "baritone.follow_player", "Follow a player by name", b -> b
                 .param(ParamDef.required("player", "string", "Player name")),
                 p -> {
                     String name = checked(p.string("player"), NAME_RE);
                     return () -> typedOr(() -> A.follow(e -> e instanceof Player pl
                             && pl.getGameProfile().getName().equalsIgnoreCase(name)), "follow player " + name);
                 });
-        process(ctx, "control.mods", "baritone.follow_entity", "Follow entities of a type", b -> b
+        act(ctx, "baritone.follow_entity", "Follow entities of a type", b -> b
                 .param(ParamDef.required("entityType", "string", "Entity type id, e.g. minecraft:cow")),
                 p -> {
                     String raw = Validation.resourceId(p.string("entityType"));
@@ -107,7 +104,7 @@ final class BaritoneBindings {
                     return () -> typedOr(() -> A.follow(e -> e instanceof Entity en
                             && BuiltInRegistries.ENTITY_TYPE.getKey(en.getType()).toString().equals(id)), "follow entity " + id);
                 });
-        process(ctx, "control.mods", "baritone.explore", "Explore, optionally around an origin (defaults to your position)", b -> b
+        act(ctx, "baritone.explore", "Explore, optionally around an origin (defaults to your position)", b -> b
                 .param(ParamDef.optional("x", "integer", "Origin X", null))
                 .param(ParamDef.optional("z", "integer", "Origin Z", null)),
                 p -> {
@@ -117,7 +114,7 @@ final class BaritoneBindings {
                     int z = p.has("z") ? p.integer("z") : (int) Math.floor(pl.getZ());
                     return () -> typedOr(() -> A.explore(x, z), "explore " + x + " " + z);
                 });
-        process(ctx, "control.mods", "baritone.mine", "Mine blocks of the given types (quantity 0 = until cancelled)", b -> b
+        act(ctx, "baritone.mine", "Mine blocks of the given types (quantity 0 = until cancelled)", b -> b
                 .param(ParamDef.required("blocks", "string", "Space-separated block ids"))
                 .param(ParamDef.optional("quantity", "integer", "How many to collect; 0 = unlimited", 0)),
                 p -> {
@@ -126,13 +123,13 @@ final class BaritoneBindings {
                     int q = inRange(p.integer("quantity", 0), 0, 100_000, "quantity");
                     return () -> typedOr(() -> A.mine(ids, q), "mine " + (q > 0 ? q + " " : "") + String.join(" ", ids));
                 });
-        process(ctx, "control.mods", "baritone.farm", "Harvest and replant nearby crops", b -> b
+        act(ctx, "baritone.farm", "Harvest and replant nearby crops", b -> b
                 .param(ParamDef.optional("range", "integer", "Farming radius; 0 = Baritone's default", 0)),
                 p -> {
                     int range = inRange(p.integer("range", 0), 0, 256, "range");
                     return () -> typedOr(() -> A.farm(range), range > 0 ? "farm " + range : "farm");
                 });
-        process(ctx, "control.mods", "baritone.tunnel", "Dig a tunnel in the direction you face (height, width, depth: all three or none)", b -> b
+        act(ctx, "baritone.tunnel", "Dig a tunnel in the direction you face (height, width, depth: all three or none)", b -> b
                 .param(ParamDef.optional("height", "integer", "Tunnel height", null))
                 .param(ParamDef.optional("width", "integer", "Tunnel width", null))
                 .param(ParamDef.optional("depth", "integer", "Tunnel depth", null)),
@@ -143,20 +140,20 @@ final class BaritoneBindings {
                             + inRange(p.integer("width"), 1, 64, "width") + " " + inRange(p.integer("depth"), 1, 10_000, "depth");
                     return () -> A.command(cmd);
                 });
-        process(ctx, "control.mods", "baritone.thisway", "Walk N blocks in the direction you are facing", b -> b
+        act(ctx, "baritone.thisway", "Walk N blocks in the direction you are facing", b -> b
                 .param(ParamDef.required("distance", "integer", "Blocks to travel (1..10000)")),
                 p -> {
                     int d = inRange(p.integer("distance"), 1, 10_000, "distance");
                     return () -> A.command("thisway " + d);
                 });
-        process(ctx, "control.mods", "baritone.axis", "Travel along the nearest axis or diagonal from the origin", b -> b,
+        act(ctx, "baritone.axis", "Travel along the nearest axis or diagonal from the origin", b -> b,
                 p -> () -> A.command("axis"));
-        process(ctx, "control.mods", "baritone.surface", "Go up to the surface", b -> b, p -> () -> A.command("surface"));
-        simple(ctx, "control.mods", "baritone.blacklist",
+        act(ctx, "baritone.surface", "Go up to the surface", b -> b, p -> () -> A.command("surface"));
+        act(ctx, "baritone.blacklist",
                 "Blacklist the closest block of the current mine/get-to-block target (use when Baritone is stuck on it)",
                 () -> A.command("blacklist"));
 
-        process(ctx, "control.mods", "baritone.waypoint_goto", "Pathfind to a saved Baritone waypoint", b -> b
+        act(ctx, "baritone.waypoint_goto", "Pathfind to a saved Baritone waypoint", b -> b
                 .param(ParamDef.required("name", "string", "Waypoint name")),
                 p -> {
                     String name = checked(p.string("name"), WAYPOINT_RE);
@@ -164,7 +161,6 @@ final class BaritoneBindings {
                 });
         ctx.actions.register("baritone.waypoint_save", ActionDef.builder("baritone.waypoint_save", "Save your current position as a Baritone waypoint")
                 .param(ParamDef.required("name", "string", "Waypoint name (letters, digits, _ and -)"))
-                .permission("control.mods").lock(LOCK)
                 .handler(p -> {
                     requirePlayer();
                     String name = checked(p.string("name"), WAYPOINT_RE);
@@ -172,13 +168,13 @@ final class BaritoneBindings {
                     return Map.of("saved", name);
                 }));
         ctx.resources.register("baritone.waypoints", new ResourceDef("baritone.waypoints",
-                "Baritone waypoints (name, tag, x, y, z). Params: offset, limit", Availability.LOCAL, "read.world", q -> {
+                "Baritone waypoints (name, tag, x, y, z). Params: offset, limit", Availability.LOCAL, q -> {
                     if (!A.installed()) return Unavailable.of("baritone.waypoints", Reason.MOD_NOT_INSTALLED);
                     return Page.of(A.waypoints(), q, 200, 1000);
                 }));
         ctx.resources.register("baritone.find", new ResourceDef("baritone.find",
                 "Known locations of a block type in Baritone's world cache, nearest regions to you first. Params: block (required), limit (default 100, max 1000)",
-                Availability.LOCAL, "read.world", q -> {
+                Availability.LOCAL, q -> {
                     if (!A.installed()) return Unavailable.of("baritone.find", Reason.MOD_NOT_INSTALLED);
                     String id = Validation.resourceId(q.string("block"));
                     int limit = inRange(q.integer("limit", 100), 1, 1000, "limit");
@@ -186,7 +182,7 @@ final class BaritoneBindings {
                     List<int[]> found = A.locationsOf(id, limit, (int) Math.floor(pl.getX()), (int) Math.floor(pl.getZ()));
                     return Map.of("block", id, "count", found.size(), "locations", found);
                 }));
-        process(ctx, "control.mods", "baritone.set_goal_path", "Set a goal and start pathing to it (same as goto but via the goal/path commands)", b -> b
+        act(ctx, "baritone.set_goal_path", "Set a goal and start pathing to it (same as goto but via the goal/path commands)", b -> b
                 .param(ParamDef.required("x", "integer", "Block X"))
                 .param(ParamDef.required("y", "integer", "Block Y"))
                 .param(ParamDef.required("z", "integer", "Block Z")),
@@ -195,18 +191,18 @@ final class BaritoneBindings {
                     return () -> { A.command("goal " + x + " " + y + " " + z); A.command("path"); };
                 });
 
-        simple(ctx, "control.mods", "baritone.cancel", "Cancel the current Baritone task",
+        act(ctx, "baritone.cancel", "Cancel the current Baritone task",
                 () -> typedOr(A::cancel, "cancel"));
-        simple(ctx, "control.mods", "baritone.pause", "Pause Baritone", () -> A.command("pause"));
-        simple(ctx, "control.mods", "baritone.resume", "Resume Baritone", () -> A.command("resume"));
-        simple(ctx, "control.mods", "baritone.repath", "Recalculate the current path", () -> A.command("repath"));
+        act(ctx, "baritone.pause", "Pause Baritone", () -> A.command("pause"));
+        act(ctx, "baritone.resume", "Resume Baritone", () -> A.command("resume"));
+        act(ctx, "baritone.repath", "Recalculate the current path", () -> A.command("repath"));
 
         registerBuildActions(ctx);
 
         ctx.actions.register("baritone.set_setting", ActionDef.builder("baritone.set_setting", "Change a Baritone setting")
                 .param(ParamDef.required("name", "string", "Setting name"))
                 .param(ParamDef.required("value", "string", "New value, parsed by Baritone"))
-                .permission("control.mods").availability(Availability.LOCAL).lock(LOCK)
+                .availability(Availability.LOCAL)
                 .handler(p -> {
                     A.command("set " + checked(p.string("name"), "[A-Za-z0-9]+") + " " + checked(p.string("value"), "[A-Za-z0-9_.:,\\- ]{1,200}"));
                     return Map.of("set", p.string("name"));
@@ -214,9 +210,8 @@ final class BaritoneBindings {
 
         ctx.actions.register("baritone.command", ActionDef.builder("baritone.command",
                         "Escape hatch: run an allowlisted Baritone command (" + String.join(", ", new java.util.TreeSet<>(ALLOWED_VERBS))
-                                + "). Prefer the typed baritone.* actions; this is fire-and-forget, not tracked as an operation")
+                                + "). Prefer the typed baritone.* actions; fire-and-forget")
                 .param(ParamDef.required("command", "string", "Command without the # prefix"))
-                .permission("control.mods").lock(LOCK)
                 .handler(p -> {
                     String line = Validation.commandLine(p.string("command"), ALLOWED_VERBS);
                     A.command(line);
@@ -224,7 +219,7 @@ final class BaritoneBindings {
                 }));
     }
 
-    // ---- bulk block editing: select / fill / clear / replace / build (permission control.build) ----
+    // ---- bulk block editing: select / fill / clear / replace / build (box size capped by config) ----
 
     private static final List<String> SHAPES = List.of("solid", "walls", "shell", "sphere", "hollow_sphere");
     private static final Map<String, String> SHAPE_TO_SEL = Map.of(
@@ -259,7 +254,7 @@ final class BaritoneBindings {
     private static void registerBuildActions(ApiContext ctx) {
         // No typed equivalent is used for fill/replace: Baritone's schematic composition classes are
         // too version-dependent to construct reliably by reflection, so these go through `sel`.
-        process(ctx, "control.build", "baritone.fill",
+        act(ctx, "baritone.fill",
                 "Fill a box with a block (solid, walls, shell, sphere or hollow_sphere) using Baritone's selection tools",
                 b -> withCorners(b.param(ParamDef.required("block", "string", "Block id, e.g. minecraft:stone"))
                         .param(new ParamDef("shape", "string", false, "Fill shape", "solid", SHAPES))),
@@ -268,7 +263,7 @@ final class BaritoneBindings {
                     return () -> runAll(cmds);
                 });
 
-        process(ctx, "control.build", "baritone.clear_area", "Break every block in a box",
+        act(ctx, "baritone.clear_area", "Break every block in a box",
                 b -> withCorners(b),
                 p -> {
                     List<String> cmds = selectThen(p, "sel cleararea");
@@ -277,7 +272,7 @@ final class BaritoneBindings {
                     return () -> typedOr(() -> A.clearArea(x1, y1, z1, x2, y2, z2), cmds.toArray(new String[0]));
                 });
 
-        process(ctx, "control.build", "baritone.replace", "Replace one block type with another inside a box",
+        act(ctx, "baritone.replace", "Replace one block type with another inside a box",
                 b -> withCorners(b.param(ParamDef.required("find", "string", "Block id to replace"))
                         .param(ParamDef.required("replace", "string", "Block id to place instead"))),
                 p -> {
@@ -285,14 +280,14 @@ final class BaritoneBindings {
                     return () -> runAll(cmds);
                 });
 
-        process(ctx, "control.build", "baritone.copy_area", "Copy a box (relative to you) to Baritone's clipboard",
+        act(ctx, "baritone.copy_area", "Copy a box (relative to you) to Baritone's clipboard",
                 b -> withCorners(b), p -> { List<String> cmds = selectThen(p, "sel copy"); return () -> runAll(cmds); });
-        process(ctx, "control.build", "baritone.paste", "Build the copied clipboard at your current position (move first)",
+        act(ctx, "baritone.paste", "Build the copied clipboard at your current position (move first)",
                 b -> b, p -> () -> A.command("sel paste"));
 
-        simple(ctx, "control.build", "baritone.clear_selection", "Clear Baritone's current selection", () -> A.command("sel clear"));
+        act(ctx, "baritone.clear_selection", "Clear Baritone's current selection", () -> A.command("sel clear"));
 
-        process(ctx, "control.build", "baritone.build",
+        act(ctx, "baritone.build",
                 "Build a schematic from the game's schematics folder (bare file name; see resource baritone.schematics). "
                         + "Optional origin x,y,z (all three or none; defaults to your position)",
                 b -> b.param(ParamDef.required("schematic", "string", "File name, e.g. house.schem"))
@@ -315,7 +310,7 @@ final class BaritoneBindings {
 
         ctx.resources.register("baritone.schematics", new ResourceDef("baritone.schematics",
                 "File names of schematics in the game's schematics folder (names only). Params: offset, limit",
-                Availability.LOCAL, "read.client", q -> {
+                Availability.LOCAL, q -> {
                     java.nio.file.Path dir = schematicsDir();
                     if (!java.nio.file.Files.isDirectory(dir)) return Page.of(List.<String>of(), q, 200, 1000);
                     try (var stream = java.nio.file.Files.list(dir)) {
@@ -362,77 +357,25 @@ final class BaritoneBindings {
     /** Validates parameters and returns the code to run; anything that can fail validation must happen here. */
     private interface Starter { Runnable prepare(Params p); }
 
-    /** Starts a Baritone process and tracks it as a cancellable operation that ends with Baritone's real outcome. */
-    private static void process(ApiContext ctx, String permission, String name, String desc, Customizer c, Starter starter) {
-        ActionDef.Builder b = ActionDef.builder(name, desc).permission(permission).lock(LOCK);
-        ctx.actions.register(name, c.apply(b).handler(p -> {
+    /** Validates parameters, then starts the Baritone action and returns immediately. Observe it via baritone.status / path events. */
+    private static void act(ApiContext ctx, String name, String desc, Customizer c, Starter starter) {
+        ctx.actions.register(name, c.apply(ActionDef.builder(name, desc)).handler(p -> {
             requirePlayer();
-            Runnable go = starter.prepare(p);
-            long since = A.eventSeq();
+            Runnable go = starter.prepare(p); // fully validated before anything is executed
             go.run();
-            return new NavTask(since);
+            return Map.of("started", name);
         }));
     }
 
-    private static void simple(ApiContext ctx, String permission, String name, String desc, Runnable body) {
-        ctx.actions.register(name, ActionDef.builder(name, desc).permission(permission).lock(LOCK).handler(p -> {
+    /** An action with no parameters. */
+    private static void act(ApiContext ctx, String name, String desc, Runnable body) {
+        ctx.actions.register(name, ActionDef.builder(name, desc).handler(p -> {
             body.run();
-            return Map.of("executed", name);
+            return Map.of("done", name);
         }));
     }
 
     private static void requirePlayer() {
         if (Minecraft.getInstance().player == null) throw ApiException.unavailable("Player is not connected to a world");
-    }
-
-    /**
-     * Tracks a Baritone task. Pathing starts asynchronously, so we wait a few ticks before treating
-     * "idle" as "finished", and use Baritone's path events to say how it ended: AT_GOAL, CALC_FAILED
-     * (operation FAILED), CANCELED, or plain idle for processes without a goal (mine, explore, follow).
-     */
-    private static final class NavTask implements LongRunning {
-        private static final int GRACE_TICKS = 10;
-        private final long since;
-        private final int generation = GENERATION.incrementAndGet();
-        private int ticks;
-        private boolean cancelled;
-
-        NavTask(long since) { this.since = since; }
-
-        public Object tick() {
-            ticks++;
-            List<String> ev = A.eventsAfter(since);
-            if (ev.contains("AT_GOAL")) return finished("AT_GOAL", ev);
-            if (ticks <= GRACE_TICKS || A.busy()) return null;
-            if (ev.contains("CALC_FAILED") || ev.contains("NEXT_CALC_FAILED"))
-                throw new IllegalStateException("Baritone could not find a path (CALC_FAILED)");
-            if (ev.contains("CANCELED")) return finished("CANCELED", ev);
-            return finished("IDLE", ev);
-        }
-
-        private Object finished(String reason, List<String> events) {
-            LocalPlayer p = Minecraft.getInstance().player;
-            Map<String, Object> r = new LinkedHashMap<>();
-            r.put("finished", true);
-            r.put("reason", reason);
-            r.put("position", p == null ? null : List.of(p.getX(), p.getY(), p.getZ()));
-            r.put("pathEvents", events);
-            return r;
-        }
-
-        public void cancel() {
-            if (cancelled) return;
-            cancelled = true;
-            if (generation == GENERATION.get()) typedOr(A::cancel, "cancel");
-        }
-
-        public Object progress() {
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("pathing", A.isPathing());
-            m.put("goal", A.goal());
-            m.put("process", A.activeProcess());
-            m.put("pathEvents", A.eventsAfter(since));
-            return m;
-        }
     }
 }

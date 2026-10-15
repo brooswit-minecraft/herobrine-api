@@ -1,33 +1,46 @@
 # herobrine-api
 
-Minecraft Universal API mod: an HTTP API embedded in the Minecraft client (NeoForge 1.21.1 first).
+Minecraft Universal API mod: a thin HTTP API embedded in the Minecraft client (NeoForge 1.21.1 first).
+The design goal is **as close to 1-to-1 with the game as possible**: reads return what Minecraft says right
+now, actions do the thing and return what it returned. The API keeps no operation, queue, lock or session state.
 
-- `core/` — platform-independent server, registries, dispatch, OpenAPI. `gradle :core:test`
-- `neoforge/` — Minecraft bindings (opt-in: `gradle -PwithNeoForge :neoforge:build`; currently uncompiled)
+- `core/` — platform-independent server, registries, Baritone adapter. `gradle :core:test`
+- `neoforge/` — Minecraft bindings (opt-in: `gradle -PwithNeoForge :neoforge:build`; **never compiled or run in a real client yet**)
 - `docs/COVERAGE.md` — what is implemented vs. the spec
 
 ## Usage
 The API is **on by default** and listens on `127.0.0.1:25580` (`port` in `config/herobrine_api-client.toml`).
-Toggle it in-game with `/herobrine_api on|off|status`; `off` stops the server, cancels running operations and
-deletes the token file. While connected to a multiplayer server, **control actions are refused** unless
-`allowControlOnMultiplayer = true` in the config (read-only endpoints still work). A fresh admin token is
-written to `config/herobrine_api.token` (owner-only permissions) each time the server starts. Create scoped tokens via `POST /api/v1/admin/tokens`
-(`{"name":"agent","permissions":["read.*","control.input"]}`) and revoke them with `DELETE /api/v1/admin/tokens/{id}`.
+
+**Two tokens**, created once and kept in `config/` (owner-only permissions, they survive restarts):
+- `herobrine_api.token` — full control (reads + actions)
+- `herobrine_api.read-token` — read only (every resource and the event stream; actions are refused)
+
+In-game: `/herobrine_api on|off|status|regenerate`. `off` stops the server and releases any keys it was holding
+(the tokens stay); `regenerate` replaces both tokens immediately.
+While connected to a multiplayer server, **actions are refused** unless `allowControlOnMultiplayer = true`
+in the config (reads still work).
 
 ```
-T=$(cat config/herobrine_api.token); H="Authorization: Bearer $T"
+H="Authorization: Bearer $(cat config/herobrine_api.token)"
 curl -H "$H" localhost:25580/api/v1/resources/player.local
-curl -H "$H" -d '{"action":"input.hold","parameters":{"key":"key.jump","ticks":5}}' localhost:25580/api/v1/actions/execute
-curl -H "$H" -d '{"action":"baritone.goto","parameters":{"x":100,"z":-40},"timeoutMs":120000}' localhost:25580/api/v1/actions/execute
-curl -H "$H" localhost:25580/api/v1/operations
-curl -H "$H" -d '{"mode":"sequential","actions":[{"action":"player.look","parameters":{"yaw":90}},{"action":"chat.send","parameters":{"message":"hi"},"delayTicks":20}]}' localhost:25580/api/v1/actions/batch
+curl -H "$H" -d '{"action":"input.key","parameters":{"key":"key.forward","down":true}}' localhost:25580/api/v1/actions/execute
+curl -H "$H" -d '{"action":"baritone.goto","parameters":{"x":100,"z":-40}}' localhost:25580/api/v1/actions/execute
+curl -H "$H" localhost:25580/api/v1/resources/baritone.status
+curl -H "$H" -N localhost:25580/api/v1/events/stream?types=baritone.path_event
 ```
 
-Every action returns `{"success":…, "action":…, "stage":…, "result":…}` or `{"success":false,"error":{"code","message"}}`.
-Long-running actions return an `operationId`; poll `/operations/{id}` or `POST /operations/{id}/cancel`.
-Bulk block editing (`baritone.fill`, `clear_area`, `replace`, `build`) needs its own `control.build` permission, caps the box size (`maxEditVolume` in the config) and only reads schematics by bare file name from `<game dir>/schematics`.
-Baritone actions use its typed Java API (reflection, optional dependency) and fall back to its command manager only for calls the installed build lacks; navigation operations finish with the real outcome from Baritone's path events (`AT_GOAL`, `CALC_FAILED`, …), also published on the `baritone.path_event` event stream.
-Actions that share a lock (e.g. `player.movement`) cannot be driven by two tokens at once.
+- Reads: `GET /api/v1/resources/{id}` → `{success, resource, availability, source, observedTick, value}`.
+- Actions: `POST /api/v1/actions/execute` `{action, parameters}` → `{success, action, result}`, or
+  `{success:false, error:{code, message}}`. Actions return immediately. Anything that takes time (Baritone pathing,
+  held keys) is started by one call, observed through resources/events, and stopped by another call
+  (`baritone.cancel`, `input.key` with `down:false`).
+- Discovery: `/resources`, `/actions`, `/events`, `/capabilities`, `/mods`, `/schema`, `/openapi.json`.
+- Data the client can't legitimately have is returned as `{"available": false, "reason": "SERVER_ONLY", ...}`, never invented.
+
+Baritone actions call its typed Java API (reflection, optional dependency) and fall back to its command manager
+only for calls the installed build lacks. Path events (`AT_GOAL`, `CALC_FAILED`, `CANCELED`, …) are published on
+the `baritone.path_event` event stream, and `baritone.status` shows the latest. Bulk edits (`fill`, `clear_area`,
+`replace`, `build`) are capped by `maxEditVolume` and read schematics only by bare file name from `<game dir>/schematics`.
 
 ## Extending from another mod
 Subscribe to `RegisterApiEvent` on `NeoForge.EVENT_BUS` and call `event.install(provider)` with a

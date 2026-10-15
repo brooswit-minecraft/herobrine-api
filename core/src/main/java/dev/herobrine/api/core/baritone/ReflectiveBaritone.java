@@ -12,9 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -31,16 +29,12 @@ public final class ReflectiveBaritone implements BaritoneAdapter {
     private static final String GOAL_XZ = "baritone.api.pathing.goals.GoalXZ";
     private static final String BLOCK_META = "baritone.api.utils.BlockOptionalMeta";
     private static final String EVENT_LISTENER = "baritone.api.event.listener.IGameEventListener";
-    private static final int EVENT_HISTORY = 64;
-
-    private record Ev(long seq, String name) {}
 
     private final ClassLoader loader;
     private final Function<int[], Object> blockPos;
-    private final AtomicLong seq = new AtomicLong();
-    private final ConcurrentLinkedDeque<Ev> events = new ConcurrentLinkedDeque<>();
     private final List<Consumer<String>> listeners = new CopyOnWriteArrayList<>();
     private volatile Object listeningOn;
+    private volatile String lastEvent;
 
     /** @param blockPos creates a Minecraft BlockPos from {x,y,z}; supplied by the platform module. */
     public ReflectiveBaritone(ClassLoader loader, Function<int[], Object> blockPos) {
@@ -199,13 +193,7 @@ public final class ReflectiveBaritone implements BaritoneAdapter {
 
     // ---- events ----
 
-    @Override public long eventSeq() { return seq.get(); }
-
-    @Override public List<String> eventsAfter(long after) {
-        List<String> out = new ArrayList<>();
-        for (Ev e : events) if (e.seq() > after) out.add(e.name());
-        return out;
-    }
+    @Override public String lastPathEvent() { return lastEvent; }
 
     @Override public void addEventListener(Consumer<String> l) { listeners.add(l); }
 
@@ -234,8 +222,7 @@ public final class ReflectiveBaritone implements BaritoneAdapter {
     }
 
     private void record(String name) {
-        events.addLast(new Ev(seq.incrementAndGet(), name));
-        while (events.size() > EVENT_HISTORY) events.pollFirst();
+        lastEvent = name;
         for (Consumer<String> l : listeners) {
             try { l.accept(name); } catch (RuntimeException ignored) {}
         }

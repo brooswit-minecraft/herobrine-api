@@ -45,7 +45,7 @@ final class ClientBindings {
                 }));
 
         ctx.resources.register("player.local", new ResourceDef("player.local", "Local player position, vitals and movement state",
-                Availability.SERVER_SYNCED, "read.players", q -> {
+                Availability.SERVER_SYNCED, q -> {
                     LocalPlayer p = requirePlayer();
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("name", p.getGameProfile().getName());
@@ -66,7 +66,7 @@ final class ClientBindings {
                 }));
 
         ctx.resources.register("world.info", new ResourceDef("world.info", "Dimension, time and weather as known to the client",
-                Availability.SERVER_SYNCED, "read.world", q -> {
+                Availability.SERVER_SYNCED, q -> {
                     Level l = Minecraft.getInstance().level;
                     if (l == null) throw ApiException.unavailable("Not in a world");
                     Map<String, Object> m = new LinkedHashMap<>();
@@ -87,7 +87,6 @@ final class ClientBindings {
         ctx.actions.register("chat.send", ActionDef.builder("chat.send",
                         "Send a plain chat message (max 256 chars; no '/' commands, control characters or '\u00a7')")
                 .param(ParamDef.required("message", "string", "Text to send"))
-                .permission("control.chat")
                 .availability(Availability.CLIENT_REQUEST)
                 .handler(p -> {
                     LocalPlayer pl = requirePlayer();
@@ -96,9 +95,8 @@ final class ClientBindings {
                 }));
 
         ctx.actions.register("chat.command", ActionDef.builder("chat.command",
-                        "Run a command on the server, without the leading '/'. Needs the stronger control.server permission")
+                        "Run a command on the server, without the leading '/'")
                 .param(ParamDef.required("command", "string", "Command text, e.g. 'time set day'"))
-                .permission("control.server")
                 .availability(Availability.CLIENT_REQUEST)
                 .handler(p -> {
                     LocalPlayer pl = requirePlayer();
@@ -109,7 +107,6 @@ final class ClientBindings {
         ctx.actions.register("player.look", ActionDef.builder("player.look", "Set the player's view angles")
                 .param(ParamDef.optional("yaw", "number", "Yaw in degrees", null))
                 .param(ParamDef.optional("pitch", "number", "Pitch in degrees (-90..90)", null))
-                .lock("player.rotation")
                 .handler(p -> {
                     LocalPlayer pl = requirePlayer();
                     if (p.has("yaw")) pl.setYRot((float) p.number("yaw"));
@@ -117,26 +114,38 @@ final class ClientBindings {
                     return Map.of("yaw", pl.getYRot(), "pitch", pl.getXRot());
                 }));
 
-        ctx.actions.register("input.hold", ActionDef.builder("input.hold",
-                        "Hold a key mapping (e.g. key.forward, key.jump, key.attack) for N ticks; returns a cancellable operation")
+        ctx.actions.register("input.key", ActionDef.builder("input.key",
+                        "Press or release a key mapping (e.g. key.forward, key.jump, key.attack), like KeyMapping.setDown. "
+                                + "The game keeps it held until you release it; keys are released when the API stops")
                 .param(ParamDef.required("key", "string", "Key mapping name, e.g. key.jump"))
-                .param(ParamDef.optional("ticks", "integer", "Duration in ticks", 1))
-                .permission("control.input")
-                .lock("player.input")
+                .param(ParamDef.required("down", "boolean", "true to press, false to release"))
                 .handler(p -> {
                     requirePlayer();
                     KeyMapping km = findKey(p.string("key"));
-                    int ticks = Math.max(1, Math.min(p.integer("ticks", 1), 20 * 60));
-                    return new LongRunning() {
-                        int left = ticks;
-                        public Object tick() {
-                            if (left-- > 0) { km.setDown(true); return null; }
-                            km.setDown(false);
-                            return Map.of("held", ticks);
-                        }
-                        public void cancel() { km.setDown(false); }
-                    };
+                    boolean down = p.bool("down", true);
+                    km.setDown(down);
+                    if (down) HELD.add(km); else HELD.remove(km);
+                    return Map.of("key", km.getName(), "down", km.isDown());
                 }));
+
+        ctx.actions.register("input.click", ActionDef.builder("input.click",
+                        "One click/tap of a key mapping (KeyMapping.click): use for attack, use-item, hotbar, drop, inventory")
+                .param(ParamDef.required("key", "string", "Key mapping name, e.g. key.attack"))
+                .handler(p -> {
+                    requirePlayer();
+                    KeyMapping km = findKey(p.string("key"));
+                    KeyMapping.click(km.getKey());
+                    return Map.of("key", km.getName(), "clicked", true);
+                }));
+    }
+
+    /** Keys this API pressed and has not released; the only state kept, so they can be let go on stop. */
+    private static final java.util.Set<KeyMapping> HELD = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** Releases every key the API is holding. Call from the client thread. */
+    static void releaseAllKeys() {
+        for (KeyMapping km : HELD) km.setDown(false);
+        HELD.clear();
     }
 
     private static LocalPlayer requirePlayer() {

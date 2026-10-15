@@ -26,7 +26,7 @@ final class ModBindings {
 
         ctx.resources.register("mods.detail", new ResourceDef("mods.detail",
                 "Per-mod metadata, dependencies and counts of registered objects per registry. Params: modId, offset, limit",
-                Availability.LOCAL, "read.client", q -> {
+                Availability.LOCAL, q -> {
                     String only = q.string("modId", null);
                     List<Map<String, Object>> all = new ArrayList<>();
                     for (var m : ModList.get().getMods()) {
@@ -46,7 +46,7 @@ final class ModBindings {
 
         ctx.resources.register("registry.entries", new ResourceDef("registry.entries",
                 "Entries of any registry (built-in or dynamic), including modded ones. Params: registry (e.g. minecraft:block), namespace, offset, limit",
-                Availability.LOCAL, "read.client", q -> {
+                Availability.LOCAL, q -> {
                     ResourceLocation key = ResourceLocation.tryParse(q.string("registry"));
                     if (key == null) throw ApiException.badRequest("Invalid registry id");
                     String ns = q.string("namespace", null);
@@ -57,7 +57,7 @@ final class ModBindings {
 
         ctx.resources.register("commands.known", new ResourceDef("commands.known",
                 "Root command names the server has told this client about",
-                Availability.SERVER_SYNCED, "read.client", q -> {
+                Availability.SERVER_SYNCED, q -> {
                     var conn = Minecraft.getInstance().getConnection();
                     if (conn == null) throw ApiException.unavailable("Not connected");
                     return conn.getCommands().getRoot().getChildren().stream().map(n -> n.getName()).sorted().toList();
@@ -65,7 +65,7 @@ final class ModBindings {
 
         ctx.resources.register("input.keybindings", new ResourceDef("input.keybindings",
                 "All registered key mappings (vanilla and modded) with category and current binding",
-                Availability.LOCAL, "read.client", q -> {
+                Availability.LOCAL, q -> {
                     List<Map<String, Object>> out = new ArrayList<>();
                     for (KeyMapping k : Minecraft.getInstance().options.keyMappings) {
                         Map<String, Object> e = new LinkedHashMap<>();

@@ -4,11 +4,9 @@ import com.mojang.logging.LogUtils;
 import dev.herobrine.api.core.ApiContext;
 import dev.herobrine.api.core.ApiServer;
 import dev.herobrine.api.core.Limits;
-import dev.herobrine.api.core.TokenStore;
+import dev.herobrine.api.core.Tokens;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Set;
 import net.neoforged.fml.loading.FMLPaths;
 import org.slf4j.Logger;
 
@@ -17,6 +15,7 @@ final class ApiController {
     private static final Logger LOG = LogUtils.getLogger();
 
     private final ApiContext ctx;
+    private Tokens tokens;
     private ApiServer server;
     private int port;
 
@@ -25,39 +24,38 @@ final class ApiController {
     boolean isRunning() { return server != null; }
     int port() { return port; }
 
-    /** @return the bound port. A fresh admin token is written to config/herobrine_api.token. */
+    /**
+     * @return the bound port. Tokens live in config/herobrine_api.token (full control) and
+     * config/herobrine_api.read-token (read only); they are created once and survive restarts.
+     */
     synchronized int start() throws IOException {
         if (server != null) return port;
-        TokenStore tokens = new TokenStore();
-        String secret = tokens.create("local-admin", Set.of("*")).secret();
+        Path dir = FMLPaths.CONFIGDIR.get();
+        if (tokens == null) tokens = Tokens.loadOrCreate(dir.resolve("herobrine_api.token"), dir.resolve("herobrine_api.read-token"));
         ApiServer s = new ApiServer(ctx, tokens, Limits.defaults());
         int bound = s.start(ClientConfig.PORT.get());
         server = s;
         port = bound;
-        writeTokenFile(secret);
-        LOG.info("Herobrine API on http://127.0.0.1:{}/api/v1 (admin token in {})", bound, tokenFile());
+        LOG.info("Herobrine API on http://127.0.0.1:{}/api/v1 (tokens in {})", bound, dir);
         return bound;
     }
 
-    /** Stops the server, cancels all running operations and removes the token file. */
+    /** Stops the server and releases any keys it was holding. The token files are kept. */
     synchronized void stop() {
         if (server == null) return;
         server.stop();
         server = null;
-        int cancelled = ctx.operations.cancelAll();
-        try { Files.deleteIfExists(tokenFile()); } catch (IOException e) { LOG.warn("Could not delete token file", e); }
-        LOG.info("Herobrine API stopped ({} operations cancelled)", cancelled);
+        ClientBindings.releaseAllKeys();
+        LOG.info("Herobrine API stopped");
     }
 
-    private static Path tokenFile() { return FMLPaths.CONFIGDIR.get().resolve("herobrine_api.token"); }
-
-    private static void writeTokenFile(String secret) throws IOException {
-        Path f = tokenFile();
-        Files.deleteIfExists(f);
-        Files.writeString(f, secret);
-        try { // owner-only where the filesystem supports it
-            Files.setPosixFilePermissions(f, java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
-        } catch (UnsupportedOperationException ignored) {
+    /** Replaces both tokens; the old ones stop working immediately (no restart needed). */
+    synchronized void regenerateTokens() throws IOException {
+        if (tokens == null) {
+            Path dir = FMLPaths.CONFIGDIR.get();
+            tokens = Tokens.loadOrCreate(dir.resolve("herobrine_api.token"), dir.resolve("herobrine_api.read-token"));
         }
+        tokens.regenerate();
+        LOG.info("Herobrine API tokens regenerated");
     }
 }
