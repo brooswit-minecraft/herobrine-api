@@ -84,15 +84,25 @@ final class ClientBindings {
         ctx.resources.register("registry.list", new ResourceDef("registry.list", "Names of all built-in registries",
                 Availability.LOCAL, q -> BuiltInRegistries.REGISTRY.keySet().stream().map(Object::toString).sorted().toList()));
 
-        ctx.actions.register("chat.send", ActionDef.builder("chat.send", "Send a chat message, or a command if it starts with '/'")
+        ctx.actions.register("chat.send", ActionDef.builder("chat.send",
+                        "Send a plain chat message (max 256 chars; no '/' commands, control characters or '\u00a7')")
                 .param(ParamDef.required("message", "string", "Text to send"))
                 .permission("control.chat")
                 .availability(Availability.CLIENT_REQUEST)
                 .handler(p -> {
                     LocalPlayer pl = requirePlayer();
-                    String msg = p.string("message");
-                    if (msg.startsWith("/")) pl.connection.sendCommand(msg.substring(1));
-                    else pl.connection.sendChat(msg);
+                    pl.connection.sendChat(Validation.chatText(p.string("message")));
+                    return Map.of("sent", true);
+                }));
+
+        ctx.actions.register("chat.command", ActionDef.builder("chat.command",
+                        "Run a command on the server, without the leading '/'. Needs the stronger control.server permission")
+                .param(ParamDef.required("command", "string", "Command text, e.g. 'time set day'"))
+                .permission("control.server")
+                .availability(Availability.CLIENT_REQUEST)
+                .handler(p -> {
+                    LocalPlayer pl = requirePlayer();
+                    pl.connection.sendCommand(Validation.chatText(p.string("command")));
                     return Map.of("sent", true);
                 }));
 

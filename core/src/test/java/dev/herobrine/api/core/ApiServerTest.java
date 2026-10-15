@@ -285,4 +285,35 @@ class ApiServerTest {
         assertTrue(ctx.operations.cancelAll() >= 1);
         assertEquals("cancelled", status(controller, id));
     }
+
+    @Test void infoEndpointsNeedReadPermission() throws Exception {
+        String none = tokens.create("none", Set.of()).secret();
+        for (String p : new String[]{"/mods", "/capabilities", "/schema", "/openapi.json"})
+            assertEquals(403, call("GET", p, null, none).statusCode(), p);
+        assertEquals(200, call("GET", "/actions", null, none).statusCode()); // discovery shows what is permitted
+        assertEquals(200, call("GET", "/mods", null, reader).statusCode());
+    }
+
+    @Test void everyBatchStepIsAudited() throws Exception {
+        String body = "{\"mode\":\"concurrent\",\"actions\":[{\"action\":\"test.echo\",\"parameters\":{\"text\":\"audit-me-1\"}},{\"action\":\"test.echo\",\"parameters\":{\"text\":\"audit-me-2\"}}]}";
+        assertEquals(200, call("POST", "/actions/batch", body, controller).statusCode());
+        String log = call("GET", "/admin/audit", null, admin).body();
+        assertTrue(log.contains("audit-me-1") && log.contains("audit-me-2"));
+    }
+
+    @Test void chatTextValidation() {
+        assertEquals("hello", Validation.chatText("hello"));
+        for (String bad : new String[]{"", "  ", "/op me", "a\nb", "x\u00a7cred", "z".repeat(257)})
+            assertThrows(ApiException.class, () -> Validation.chatText(bad), bad);
+        assertEquals(256, Validation.chatText("z".repeat(256)).length());
+    }
+
+    @Test void commandAllowlist() {
+        Set<String> allowed = Set.of("goto", "cancel");
+        assertEquals("goto 1 2 3", Validation.commandLine("  GOTO 1 2 3 ", allowed).toLowerCase());
+        assertThrows(ApiException.class, () -> Validation.commandLine("set allowBreak true", allowed));
+        assertThrows(ApiException.class, () -> Validation.commandLine("goto 1\nset x", allowed));
+        assertThrows(ApiException.class, () -> Validation.commandLine("goto; set x", allowed));
+        assertThrows(ApiException.class, () -> Validation.commandLine("", allowed));
+    }
 }

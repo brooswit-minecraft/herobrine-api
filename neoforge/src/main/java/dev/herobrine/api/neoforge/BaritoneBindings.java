@@ -19,13 +19,17 @@ final class BaritoneBindings {
     /** Bumped for every new navigation task, so a preempted task doesn't cancel its successor's path. */
     private static final java.util.concurrent.atomic.AtomicInteger GENERATION = new java.util.concurrent.atomic.AtomicInteger();
     private static final String ID_RE = "[a-z0-9_.\\-]+(:[a-z0-9_./\\-]+)?";
+    /** Verbs accepted by baritone.command. Excludes `set` (use set_setting), schematic/selection/build and file commands. */
+    private static final java.util.Set<String> ALLOWED_VERBS = java.util.Set.of(
+            "goto", "follow", "explore", "mine", "farm", "thisway", "tunnel", "come", "surface", "axis",
+            "cancel", "stop", "pause", "resume", "repath");
     private static final String NAME_RE = "[A-Za-z0-9_]{1,16}";
 
     static void register(ApiContext ctx) {
         ctx.integration("baritone", BaritoneBridge::installed);
 
         ctx.resources.register("baritone.status", new ResourceDef("baritone.status",
-                "Baritone availability, current goal/process and progress", Availability.LOCAL, "read.client", q -> {
+                "Baritone availability, current goal/process and progress", Availability.LOCAL, "read.world", q -> {
                     if (!BaritoneBridge.installed()) return Unavailable.of("baritone", Reason.MOD_NOT_INSTALLED);
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("installed", true);
@@ -35,7 +39,7 @@ final class BaritoneBindings {
                     return m;
                 }));
         ctx.resources.register("baritone.path", new ResourceDef("baritone.path",
-                "Current path nodes (capped at 1000)", Availability.LOCAL, "read.client", q -> {
+                "Current path nodes (capped at 1000)", Availability.LOCAL, "read.world", q -> {
                     if (!BaritoneBridge.installed()) return Unavailable.of("baritone.path", Reason.MOD_NOT_INSTALLED);
                     List<int[]> nodes = BaritoneBridge.pathNodes(1000);
                     return Map.of("nodeCount", nodes.size(), "nodes", nodes);
@@ -82,19 +86,21 @@ final class BaritoneBindings {
         ctx.actions.register("baritone.set_setting", ActionDef.builder("baritone.set_setting", "Change a Baritone setting")
                 .param(ParamDef.required("name", "string", "Setting name"))
                 .param(ParamDef.required("value", "string", "New value, parsed by Baritone"))
-                .permission("control.mods").availability(Availability.LOCAL)
+                .permission("control.mods").availability(Availability.LOCAL).lock(LOCK)
                 .handler(p -> {
                     BaritoneBridge.command("set " + checked(p.string("name"), "[A-Za-z0-9]+") + " " + checked(p.string("value"), "[A-Za-z0-9_.:,\\- ]{1,200}"));
                     return Map.of("set", p.string("name"));
                 }));
 
         ctx.actions.register("baritone.command", ActionDef.builder("baritone.command",
-                        "Run any Baritone command (see its #help); fire-and-forget, not tracked as an operation")
+                        "Run an allowlisted Baritone command (" + String.join(", ", new java.util.TreeSet<>(ALLOWED_VERBS))
+                                + "); fire-and-forget, not tracked as an operation")
                 .param(ParamDef.required("command", "string", "Command without the # prefix"))
                 .permission("control.mods").lock(LOCK)
                 .handler(p -> {
-                    BaritoneBridge.command(p.string("command"));
-                    return Map.of("executed", p.string("command"));
+                    String line = Validation.commandLine(p.string("command"), ALLOWED_VERBS);
+                    BaritoneBridge.command(line);
+                    return Map.of("executed", line);
                 }));
     }
 
@@ -117,7 +123,7 @@ final class BaritoneBindings {
     }
 
     private static void simple(ApiContext ctx, String name, String desc, String command) {
-        ctx.actions.register(name, ActionDef.builder(name, desc).permission("control.mods").handler(p -> {
+        ctx.actions.register(name, ActionDef.builder(name, desc).permission("control.mods").lock(LOCK).handler(p -> {
             BaritoneBridge.command(command);
             return Map.of("executed", command);
         }));

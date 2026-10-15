@@ -129,10 +129,10 @@ public final class ApiServer {
             case "/actions" -> { need(method, "GET"); json(ex, 200, listActions(tok)); }
             case "/events" -> { need(method, "GET"); json(ex, 200, Json.GSON.toJsonTree(ctx.events.knownTypes())); }
             case "/events/stream" -> { need(method, "GET"); require(tok, "read.client"); stream(ex); }
-            case "/capabilities" -> { need(method, "GET"); json(ex, 200, onGameThread(() -> Json.GSON.toJsonTree(ctx.capabilitiesDocument()))); }
-            case "/mods" -> { need(method, "GET"); json(ex, 200, onGameThread(() -> Json.GSON.toJsonTree(ctx.mods.get()))); }
-            case "/schema" -> { need(method, "GET"); json(ex, 200, schemas()); }
-            case "/openapi.json" -> { need(method, "GET"); json(ex, 200, OpenApi.document(ctx)); }
+            case "/capabilities" -> { need(method, "GET"); require(tok, "read.client"); json(ex, 200, onGameThread(() -> Json.GSON.toJsonTree(ctx.capabilitiesDocument()))); }
+            case "/mods" -> { need(method, "GET"); require(tok, "read.client"); json(ex, 200, onGameThread(() -> Json.GSON.toJsonTree(ctx.mods.get()))); }
+            case "/schema" -> { need(method, "GET"); require(tok, "read.client"); json(ex, 200, schemas()); }
+            case "/openapi.json" -> { need(method, "GET"); require(tok, "read.client"); json(ex, 200, OpenApi.document(ctx)); }
             case "/actions/execute" -> { need(method, "POST"); execute(ex, tok); }
             case "/actions/batch" -> { need(method, "POST"); batch(ex, tok); }
             case "/operations" -> { need(method, "GET"); listOperations(ex, tok); }
@@ -295,6 +295,8 @@ public final class ApiServer {
             steps.add(new ActionExecutor.Step(a, new Params(argsOf(item)), Math.max(0, intField(item, "delayTicks", 0))));
         }
         ctx.audit.record(tok.id(), "batch", mode + " x" + steps.size());
+        for (ActionExecutor.Step st : steps)
+            ctx.audit.record(tok.id(), "action", st.action().name() + " " + st.params().raw() + " (batch)");
 
         JsonObject res = onGameThread(() -> {
             JsonObject o = new JsonObject();

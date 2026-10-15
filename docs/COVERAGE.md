@@ -10,7 +10,7 @@ Required artifact (spec §17). Status values: **Tested** = covered by automated 
 |---|---|---|---|---|---|---|---|
 | HTTP server | `ApiServer` (JDK `HttpServer`) | `/api/v1` index | — | — | client | Tested | No TLS (use a proxy); no WebSocket |
 | Auth & permissions (§12) | `TokenStore` | `/admin/tokens` | create / revoke | — | client | Tested | Tokens are in-memory, regenerated on start; no per-IP controls |
-| Audit (§12.4) | `AuditLog` | `/admin/audit` | — | — | client | Tested | Ring buffer of 1000 |
+| Audit (§12.4) | `AuditLog` | `/admin/audit` (every batch step is logged individually) | — | — | client | Tested | Ring buffer of 1000 |
 | Limits (§13.2) | `Limits` | — | — | — | client | Tested (concurrency, rate, response size, batch size, body size) | No max radius/block/entity limits yet (no spatial queries exist) |
 | Pagination (§13.3) | `Page` | used by list endpoints | — | — | client | Tested | — |
 | Discovery (§3.5) | `OpenApi`, registries | `/resources /actions /events /capabilities /mods /schema /openapi.json` | — | — | client | Tested | OpenAPI response schemas are generic; no JSON Schema for resource values |
@@ -32,12 +32,12 @@ Required artifact (spec §17). Status values: **Tested** = covered by automated 
 | Local player | `LocalPlayer` | `player.local` | `player.look` | — | SERVER_SYNCED | Draft | Subset of §4.7; no inventory/effects/abilities |
 | World | `Level` | `world.info` | — | — | SERVER_SYNCED | Draft | No gamerules/border/biome/weather detail |
 | Input | `KeyMapping` | `input.keybindings` | `input.hold` | — | LOCAL | Draft | No mouse, cursor or raw key events |
-| Chat | `ClientPacketListener` | — | `chat.send` | — | CLIENT_REQUEST | Draft | No chat history/events |
+| Chat | `ClientPacketListener`, `Validation` | — | `chat.send` (plain text, ≤256 chars, no control chars/§/leading `/`), `chat.command` (needs `control.server`) | — | CLIENT_REQUEST | Draft (validation Tested in core) | No chat history/events; no per-action cooldown yet |
 | Registries (§7.1, §4.16) | `BuiltInRegistries`, `RegistryAccess` | `registry.list`, `registry.entries` (paged, cached for built-ins) | — | — | LOCAL | Draft | Ids only; no per-entry property serialization |
 | Mods (§7.1) | `ModList`, `IModInfo` | `/mods`, `mods.detail` (deps, registered counts per registry) | — | — | LOCAL | Draft | No config exposure; commands/keybindings/capabilities/events not attributed to mods |
 | Commands | `ClientPacketListener#getCommands` | `commands.known` | — | — | SERVER_SYNCED | Draft | Root names only; no client commands, syntax or arg types |
 | Runtime toggle | `ApiController`, `ClientConfig`, `/herobrine_api` | — | `on` / `off` / `status` | — | LOCAL | Draft | Multiplayer control block uses `hasSingleplayerServer()`; no on-screen indicator yet |
-| Baritone (§6) | `baritone.api.*` via reflection | `baritone.status`, `baritone.path`, `baritone.settings` | `baritone.goto / goto_block / follow_player / follow_entity / explore / mine / cancel / pause / resume / repath / set_setting / command` | — | LOCAL | Draft | Reflection against unverified API names; no failure reason (Baritone only reports it in chat); path cost not exposed; settings read-only except via `set_setting` |
+| Baritone (§6) | `baritone.api.*` via reflection | `baritone.status`/`baritone.path` (need `read.world`), `baritone.settings` | `baritone.goto / goto_block / follow_player / follow_entity / explore / mine / cancel / pause / resume / repath / set_setting / command` | — | LOCAL | Draft | Reflection against unverified API names; no failure reason (Baritone only reports it in chat); path cost not exposed; settings read-only except via `set_setting` |
 
 ## Not started (spec reference)
 - §4.2–4.6, 4.8–4.9: blocks, chunks, block entities, entities, other players, living-entity AI, items/inventories/data components
