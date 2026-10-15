@@ -1,0 +1,6 @@
+rootProject.name = 'herobrine-api'
+include 'core'
+// The NeoForge module needs maven.neoforged.net; include it explicitly: ./gradlew -PwithNeoForge build
+if (providers.gradleProperty('withNeoForge').isPresent()) {
+    include 'neoforge'
+}

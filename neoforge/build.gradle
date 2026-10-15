@@ -1,0 +1,34 @@
+// Compiled in CI. Build with: ./gradlew -PwithNeoForge :neoforge:build
+plugins {
+    id 'java'
+    id 'net.neoforged.moddev' version '2.0.78'
+}
+
+java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
+
+base { archivesName = 'herobrine-api' }
+
+repositories {
+    maven { url = 'https://maven-central.storage-download.googleapis.com/maven2' }
+    mavenCentral()
+}
+
+neoForge {
+    version = '21.1.172'
+    runs {
+        client { client() }
+    }
+    mods {
+        herobrine_api { sourceSet sourceSets.main }
+    }
+}
+
+dependencies {
+    implementation project(':core')
+}
+
+// Bundle core classes into the mod jar (Gson is provided by Minecraft at runtime).
+jar {
+    dependsOn ':core:classes'
+    from project(':core').sourceSets.main.output
+}
