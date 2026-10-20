@@ -23,15 +23,17 @@ game with WorldEdit installed is MINECRAFT-477.
   next WorldEdit release still applies.
 - `ReflectiveWorldEdit` enforces this at runtime: the version must equal `"7.3.8"` exactly, or match it with a
   build-metadata suffix (e.g. `"7.3.8+1379-7d32b45"`), or every adapter call fails fast with
-  `501 UNSUPPORTED` naming the installed version. The version is `WorldEdit.getVersion()`, which reads the
-  `WorldEdit-Version` attribute of the manifest of the jar holding `WorldEditManifest` - `7.3.8` in the
-  published `worldedit-neoforge-mc1.21-7.3.8.jar` (checked). That lookup only understands a `jar:` class URL
-  (`WorldEditManifest.java:70`) and otherwise reports `"(unknown)"` (`:61`); NeoForge's module class loader
-  (securejarhandler 3.0.8 in this build) serves classes from `union:` URLs, so under NeoForge the adapter
-  falls back to the version WorldEdit declares to the loader (its `mods.toml`: `7.3.8+1379-7d32b45`, read
-  through NeoForge's `ModList`; MINECRAFT-476). A version WorldEdit does report is never overridden. An earlier draft matched any `"7.3."`-prefixed version,
+  `501 UNSUPPORTED` naming the installed version. An earlier draft matched any `"7.3."`-prefixed version,
   which would have silently accepted an unverified `7.3.9` (or `7.3.80`, etc.) instead of rejecting it - only
   the one release actually verified here is accepted.
+- Where the version comes from (MINECRAFT-476): `WorldEdit.getVersion()` reads the `WorldEdit-Version`
+  attribute from the manifest of the jar holding `WorldEditManifest` (the NeoForge build declares `7.3.8`
+  there, checked in the published `worldedit-neoforge-mc1.21-7.3.8.jar`). That lookup only understands a
+  `jar:` class URL (`WorldEditManifest.java:70`) and otherwise reports `"(unknown)"` (`:61`), and NeoForge's
+  module class loader (securejarhandler 3.0.8 in this build) serves classes from `union:` URLs. So when
+  WorldEdit reports `"(unknown)"` the adapter falls back to the version WorldEdit declares to the loader -
+  its `mods.toml` version, `7.3.8+1379-7d32b45`, read through NeoForge's `ModList`. A version WorldEdit does
+  report is never overridden.
 
 ## Coverage matrix (`WorldEditAdapter` / `ReflectiveWorldEdit`)
 
