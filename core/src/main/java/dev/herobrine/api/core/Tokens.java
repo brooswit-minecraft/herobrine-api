@@ -14,6 +14,8 @@ import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.HexFormat;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Bearer secrets kept in files so they survive restarts. Two flavors:
@@ -29,8 +31,9 @@ import java.util.Optional;
  * and persisted on the spot (no restart required), while an existing valid value is left untouched
  * (stable -- no spurious rewrite, no spurious rotation). A fresh value is only ever accepted after
  * it has been durably persisted (write-then-publish); a persistence failure fails closed. Concurrent
- * callers (threads, or separate processes racing on the same file) converge on exactly one persisted
- * value via an OS file lock plus an atomic, non-clobbering rename.
+ * callers (threads within this JVM, independent {@code Tokens} instances within this JVM, or
+ * separate processes racing on the same file) converge on exactly one persisted value via an
+ * in-process monitor plus an OS file lock, and an atomic, non-clobbering rename.
  */
 public final class Tokens {
     public enum Access { FULL, READ }
@@ -159,16 +162,49 @@ public final class Tokens {
         String run() throws IOException;
     }
 
-    /** Runs {@code work} while holding an OS-level lock on a sibling lock file, so concurrent
-     * regeneration attempts (other threads, or other processes on the same machine) serialize. */
+    /**
+     * Per-canonical-lock-path monitors, one per distinct lock file this JVM has touched. A JVM-wide
+     * {@link FileLock} is advisory and keyed by the underlying file, but it is NOT a mutex: a second
+     * attempt from the same JVM to lock a region it (or another channel in the same JVM) already
+     * holds throws {@link java.nio.channels.OverlappingFileLockException} instead of blocking. So two
+     * threads -- or two independent {@code Tokens} instances -- in this JVM racing on the same file
+     * must be serialized here, in-process, before either reaches {@link FileChannel#lock()}.
+     */
+    private static final ConcurrentHashMap<Path, ReentrantLock> IN_PROCESS_LOCKS = new ConcurrentHashMap<>();
+
+    /**
+     * Runs {@code work} while holding both an in-process monitor (so same-JVM threads/instances
+     * block and wait for each other rather than racing {@link FileChannel#lock()}) and an OS-level
+     * lock on a sibling lock file (so other processes on the same machine also serialize).
+     */
     private String withLock(Path f, LockedWork work) throws IOException {
         Path parent = f.toAbsolutePath().getParent();
         if (parent != null) Files.createDirectories(parent);
         Path lockPath = f.resolveSibling(f.getFileName().toString() + LOCK_SUFFIX);
-        try (FileChannel ch = FileChannel.open(lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
-             FileLock lock = ch.lock()) {
-            return work.run();
+        ReentrantLock inProcess = IN_PROCESS_LOCKS.computeIfAbsent(canonicalKey(lockPath), k -> new ReentrantLock());
+        inProcess.lock();
+        try {
+            try (FileChannel ch = FileChannel.open(lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+                 FileLock lock = ch.lock()) {
+                return work.run();
+            }
+        } finally {
+            inProcess.unlock();
         }
+    }
+
+    /**
+     * A stable identity for {@code lockPath} regardless of how the caller spelled it (relative vs.
+     * absolute, symlinked parent, etc.), so the same underlying file always maps to the same
+     * in-process monitor. The lock file itself may not exist yet, so this resolves the parent
+     * directory (already created by the caller) to its real path and appends the file name, rather
+     * than resolving the lock file's own real path.
+     */
+    private static Path canonicalKey(Path lockPath) throws IOException {
+        Path abs = lockPath.toAbsolutePath().normalize();
+        Path parent = abs.getParent();
+        Path parentReal = parent != null ? parent.toRealPath() : abs.getRoot().toRealPath();
+        return parentReal.resolve(abs.getFileName());
     }
 
     private String generateSecret() {
