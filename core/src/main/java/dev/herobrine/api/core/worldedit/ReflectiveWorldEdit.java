@@ -77,17 +77,28 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
         return invoke(invoke(we, "getSessionManager"), "get", actor);
     }
 
+    /**
+     * {@code LocalSession.createEditSession(Actor)}, never {@code WorldEdit.newEditSession(Actor)}: the
+     * session-owned call honors the actor's configured block change limit, mask, world override and block
+     * bag the way WorldEdit's own commands do (verified in {@code LocalSession.java:1104-1127}); the bare
+     * builder behind {@code newEditSession} does not.
+     */
+    private Object newEditSession(Object session, Object actor) {
+        return invoke(session, "createEditSession", actor);
+    }
+
     // ---- edits ----
 
     @Override public int setBlocks(Object actor, Box box, String pattern) {
         Object we = worldEdit();
         Object region = region(box);
         Object patternObj = parsePattern(we, actor, pattern);
-        Object editSession = invoke(we, "newEditSession", actor);
+        Object session = session(we, actor);
+        Object editSession = newEditSession(session, actor);
         try {
             int changed = (Integer) invokeTranslating(editSession, "setBlocks", MAX_CHANGED_BLOCKS_EXCEPTION,
                     "Edit exceeds the configured block change limit", region, patternObj);
-            invoke(session(we, actor), "remember", editSession);
+            invoke(session, "remember", editSession);
             return changed;
         } finally {
             invoke(editSession, "close");
@@ -99,11 +110,12 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
         Object region = region(box);
         Object maskObj = parseMask(we, actor, mask);
         Object patternObj = parsePattern(we, actor, pattern);
-        Object editSession = invoke(we, "newEditSession", actor);
+        Object session = session(we, actor);
+        Object editSession = newEditSession(session, actor);
         try {
             int changed = (Integer) invokeTranslating(editSession, "replaceBlocks", MAX_CHANGED_BLOCKS_EXCEPTION,
                     "Edit exceeds the configured block change limit", region, maskObj, patternObj);
-            invoke(session(we, actor), "remember", editSession);
+            invoke(session, "remember", editSession);
             return changed;
         } finally {
             invoke(editSession, "close");
@@ -124,17 +136,16 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
 
     // ---- clipboard / schematics ----
 
+    /** Origin is the box's minimum corner: a fixed, typed input, not WorldEdit's placement-position heuristic. */
     @Override public void copy(Object actor, Box box) {
         Object we = worldEdit();
         Object region = region(box);
         Object session = session(we, actor);
         Object clipboard = create(BLOCK_ARRAY_CLIPBOARD, region);
-        Object origin = invokeTranslating(session, "getPlacementPosition", INCOMPLETE_REGION_EXCEPTION,
-                "No selection is defined for the placement position", actor);
-        invoke(clipboard, "setOrigin", origin);
-        Object editSession = invoke(we, "newEditSession", actor);
+        Object minPoint = invoke(region, "getMinimumPoint");
+        invoke(clipboard, "setOrigin", minPoint);
+        Object editSession = newEditSession(session, actor);
         try {
-            Object minPoint = invoke(region, "getMinimumPoint");
             Object copyOp = create(FORWARD_EXTENT_COPY, editSession, region, clipboard, minPoint);
             invokeStatic(load(OPERATIONS), "completeLegacy", copyOp);
             invoke(session, "setClipboard", create(CLIPBOARD_HOLDER, clipboard));
@@ -147,7 +158,7 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
         Object we = worldEdit();
         Object session = session(we, actor);
         Object holder = invokeTranslating(session, "getClipboard", EMPTY_CLIPBOARD_EXCEPTION, "No clipboard is set");
-        Object editSession = invoke(we, "newEditSession", actor);
+        Object editSession = newEditSession(session, actor);
         try {
             Object to = blockVector3(x, y, z);
             Object pasteBuilder = invoke(holder, "createPaste", editSession);
@@ -162,8 +173,7 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
 
     @Override public void saveSchematic(Object actor, File file) {
         Object we = worldEdit();
-        Object format = invokeStatic(load(CLIPBOARD_FORMATS), "findByFile", file);
-        if (format == null) throw ApiException.badRequest("Unrecognized schematic format for file " + file.getName());
+        Object format = resolveFormat(file);
         Object session = session(we, actor);
         Object holder = invokeTranslating(session, "getClipboard", EMPTY_CLIPBOARD_EXCEPTION, "No clipboard is set");
         Object clipboard = invoke(holder, "getClipboard");
@@ -177,8 +187,7 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
 
     @Override public void loadSchematic(Object actor, File file) {
         Object we = worldEdit();
-        Object format = invokeStatic(load(CLIPBOARD_FORMATS), "findByFile", file);
-        if (format == null) throw ApiException.badRequest("Unrecognized schematic format for file " + file.getName());
+        Object format = resolveFormat(file);
         Object clipboard;
         try (FileInputStream in = new FileInputStream(file)) {
             Object reader = invoke(format, "getReader", in);
@@ -187,6 +196,29 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
             throw new ApiException(500, "ACTION_FAILED", "Cannot read schematic " + file.getName() + ": " + e);
         }
         invoke(session(we, actor), "setClipboard", create(CLIPBOARD_HOLDER, clipboard));
+    }
+
+    /**
+     * Resolves a schematic file's format. Tries content detection ({@code ClipboardFormats.findByFile},
+     * which opens and sniffs the file - verified in {@code ClipboardFormats.java:93} /
+     * {@code ClipboardFormat.java:68}) only when the file already exists; a brand-new save target cannot
+     * have content to sniff, so falls back to {@code ClipboardFormats.findByAlias} on the file's extension
+     * (verified: {@code BuiltInClipboardFormat.SPONGE_V3_SCHEMATIC} registers {@code "schem"} as both its
+     * primary extension and an alias - {@code BuiltInClipboardFormat.java:135}). Using {@code findByFile}
+     * alone for saves was wrong: it always returned {@code null} for a file that did not yet exist.
+     */
+    private Object resolveFormat(File file) {
+        Object format = file.isFile() ? invokeStatic(load(CLIPBOARD_FORMATS), "findByFile", file) : null;
+        if (format == null) {
+            String name = file.getName();
+            int dot = name.lastIndexOf('.');
+            if (dot >= 0 && dot < name.length() - 1) {
+                String ext = name.substring(dot + 1).toLowerCase(java.util.Locale.ROOT);
+                format = invokeStatic(load(CLIPBOARD_FORMATS), "findByAlias", ext);
+            }
+        }
+        if (format == null) throw ApiException.badRequest("Unrecognized schematic format for file " + file.getName());
+        return format;
     }
 
     // ---- selection ----

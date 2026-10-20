@@ -2,7 +2,6 @@ package com.sk89q.worldedit;
 
 import com.sk89q.worldedit.extension.factory.MaskFactory;
 import com.sk89q.worldedit.extension.factory.PatternFactory;
-import com.sk89q.worldedit.extension.platform.Actor;
 import com.sk89q.worldedit.session.SessionManager;
 import dev.herobrine.api.core.worldedit.FakeWorldEdit;
 
@@ -19,9 +18,4 @@ public final class WorldEdit {
     public SessionManager getSessionManager() { return sessionManager; }
     public PatternFactory getPatternFactory() { return patternFactory; }
     public MaskFactory getMaskFactory() { return maskFactory; }
-
-    public EditSession newEditSession(Actor actor) {
-        FakeWorldEdit.INSTANCE.calls.add("newEditSession:" + actor);
-        return new EditSession(actor);
-    }
 }

@@ -9,16 +9,27 @@ import dev.herobrine.api.core.worldedit.FakeWorldEdit;
 
 public final class EditSession implements Extent, AutoCloseable {
     public final Actor actor;
+    /** -1 = unlimited, carried over from the owning {@code LocalSession.createEditSession(Actor)} call. */
+    public final int maxBlocks;
     public boolean closed;
 
-    public EditSession(Actor actor) { this.actor = actor; }
+    public EditSession(Actor actor) { this(actor, -1); }
+    public EditSession(Actor actor, int maxBlocks) { this.actor = actor; this.maxBlocks = maxBlocks; }
 
     public int setBlocks(Region region, Pattern pattern) throws MaxChangedBlocksException {
-        return FakeWorldEdit.INSTANCE.setBlocks(this, region, pattern);
+        int changed = FakeWorldEdit.INSTANCE.setBlocks(this, region, pattern);
+        enforceLimit(changed);
+        return changed;
     }
 
     public int replaceBlocks(Region region, Mask mask, Pattern pattern) throws MaxChangedBlocksException {
-        return FakeWorldEdit.INSTANCE.replaceBlocks(this, region, mask, pattern);
+        int changed = FakeWorldEdit.INSTANCE.replaceBlocks(this, region, mask, pattern);
+        enforceLimit(changed);
+        return changed;
+    }
+
+    private void enforceLimit(int changed) throws MaxChangedBlocksException {
+        if (maxBlocks >= 0 && changed > maxBlocks) throw new MaxChangedBlocksException(maxBlocks);
     }
 
     public void close() {

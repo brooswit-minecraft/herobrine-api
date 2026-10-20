@@ -75,6 +75,7 @@ public final class FakeWorldEdit {
                 return new ClipboardWriter() {
                     @Override public void write(Clipboard clipboard) throws IOException {
                         if (schematicIoFails) throw new IOException("simulated write failure");
+                        outputStream.write("FAKE-SCHEM".getBytes(java.nio.charset.StandardCharsets.UTF_8));
                         calls.add("schematic.write:" + clipboard);
                     }
                     @Override public void close() { calls.add("writer.close"); }

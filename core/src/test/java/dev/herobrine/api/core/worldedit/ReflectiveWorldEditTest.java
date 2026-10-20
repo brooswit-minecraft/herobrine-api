@@ -57,10 +57,20 @@ class ReflectiveWorldEditTest {
         int changed = a.setBlocks(actor, box, "stone");
         assertEquals(7, changed);
         assertEquals(
-                java.util.List.of("parsePattern:stone", "newEditSession:" + actor,
+                java.util.List.of("parsePattern:stone", "createEditSession:" + actor + ":maxBlocks=-1",
                         "setBlocks:CuboidRegion(BV3(3,8,5),BV3(5,10,7)):stone", "close"),
                 FakeWorldEdit.INSTANCE.calls);
         assertEquals(1, session().history.size());
+    }
+
+    @Test void exceedingTheSessionBlockChangeLimitIsABadRequestAndNeverRemembered() {
+        // Proves the adapter honors LocalSession.createEditSession's configured limit (not a bare,
+        // unlimited WorldEdit.newEditSession builder): FakeWorldEdit.setBlocks always "changes" 7 blocks.
+        session().blockChangeLimit = 5;
+        Box box = new Box(0, 0, 0, 1, 1, 1);
+        ApiException e = assertThrows(ApiException.class, () -> a.setBlocks(actor, box, "stone"));
+        assertEquals("BAD_REQUEST", e.code);
+        assertEquals(0, session().history.size());
     }
 
     @Test void replaceBlocksBuildsMaskAndPattern() {
@@ -96,22 +106,20 @@ class ReflectiveWorldEditTest {
         assertFalse(a.redo(actor)); // nothing left to redo
     }
 
-    @Test void copyRequiresAPlacementPositionAndFillsTheClipboard() {
-        Box box = new Box(0, 0, 0, 2, 2, 2);
-        ApiException e = assertThrows(ApiException.class, () -> a.copy(actor, box));
-        assertEquals("BAD_REQUEST", e.code);
-
-        session().placementPosition = BlockVector3.at(1, 2, 3);
+    @Test void copyFillsTheClipboardWithOriginAtTheBoxMinimum() {
+        // No placement position needed: origin is the box's own minimum corner, a fixed typed input
+        // (WorldEditAdapter#copy's contract), not WorldEdit's own placement-position heuristic.
+        Box box = new Box(5, 10, 5, 3, 8, 7); // min (3,8,5)
         a.copy(actor, box);
         assertNotNull(session().clipboard);
-        assertTrue(FakeWorldEdit.INSTANCE.calls.stream().anyMatch(c -> c.startsWith("ForwardExtentCopy:")));
+        assertTrue(FakeWorldEdit.INSTANCE.calls.stream()
+                .anyMatch(c -> c.startsWith("ForwardExtentCopy:") && c.contains("BV3(3,8,5)")));
     }
 
     @Test void pasteRequiresAClipboardAndRemembersTheEdit() {
         ApiException e = assertThrows(ApiException.class, () -> a.paste(actor, 1, 2, 3));
         assertEquals("BAD_REQUEST", e.code);
 
-        session().placementPosition = BlockVector3.at(0, 0, 0);
         a.copy(actor, new Box(0, 0, 0, 1, 1, 1));
         int before = session().history.size();
         a.paste(actor, 10, 20, 30);
@@ -141,7 +149,6 @@ class ReflectiveWorldEditTest {
         ApiException noClipboard = assertThrows(ApiException.class, () -> a.saveSchematic(actor, schem));
         assertEquals("BAD_REQUEST", noClipboard.code);
 
-        session().placementPosition = BlockVector3.at(0, 0, 0);
         a.copy(actor, new Box(0, 0, 0, 1, 1, 1));
         a.saveSchematic(actor, schem);
         assertTrue(FakeWorldEdit.INSTANCE.calls.stream().anyMatch(c -> c.startsWith("schematic.write:")));
@@ -153,7 +160,6 @@ class ReflectiveWorldEditTest {
 
     @Test void schematicIoFailureIsAnActionFailedNotACrash(@TempDir java.nio.file.Path tmp) {
         File schem = tmp.resolve("house.schem").toFile();
-        session().placementPosition = BlockVector3.at(0, 0, 0);
         a.copy(actor, new Box(0, 0, 0, 1, 1, 1));
         FakeWorldEdit.INSTANCE.schematicIoFails = true;
         ApiException e = assertThrows(ApiException.class, () -> a.saveSchematic(actor, schem));

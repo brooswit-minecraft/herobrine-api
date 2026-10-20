@@ -36,30 +36,42 @@ from general WorldEdit knowledge. Status for everything here is **Tested against
 | Edits | `setBlocks(actor, box, pattern)` | `EditSession.setBlocks(Region, Pattern)` | Region is a `CuboidRegion` built from the box; `Pattern` parsed via `WorldEdit.getPatternFactory().parseFromInput` (WorldEdit's own pattern syntax, e.g. `stone`, `50%stone,50%dirt`) |
 | Edits | `replaceBlocks(actor, box, mask, pattern)` | `EditSession.replaceBlocks(Region, Mask, Pattern)` | `Mask` parsed via `WorldEdit.getMaskFactory().parseFromInput` (WorldEdit's own mask syntax, e.g. `stone,dirt`) |
 | Regions | `WorldEditAdapter.Box` → `CuboidRegion(BlockVector3, BlockVector3)` | — | Only cuboid regions are constructed by this adapter; arbitrary/irregular selections are only *read* (see Selection) |
-| Transforms | — | — | Not covered: WorldEdit's `Transform`/`AffineTransform` machinery is only reachable through brush/paste pipelines beyond this ticket's scope; deferred to MINECRAFT-476 if a concrete call is needed |
+| Transforms | — (not implemented; signatures verified) | `math/transform/AffineTransform.java`: `rotateX(double theta)` / `rotateY(double theta)` / `rotateZ(double theta)` / `scale(double s)` / `scale(double sx, double sy, double sz)` / `translate(double x, double y, double z)`; applied via `ClipboardHolder.setTransform(Transform)` before `createPaste` (clipboard paste) or `ForwardExtentCopy.setTransform(Transform)` (copy) | Real, public, verified methods exist (not a guess); not wired into `WorldEditAdapter` because it needs a concrete use case to pick the right contract shape (degrees vs. radians param naming, rotate-only vs. full affine) - add with the same verified-signature discipline when MINECRAFT-476 or a later ticket needs it |
 | Masks / patterns | pattern & mask string parameters on edit methods | `PatternFactory`/`MaskFactory extends AbstractFactory<E>.parseFromInput(String, ParserContext)` | Reuses WorldEdit's own parser/grammar instead of a parallel one; malformed input surfaces as `400 BAD_REQUEST`, not a crash |
-| Clipboard | `copy(actor, box)` | `BlockArrayClipboard(Region)` + `ForwardExtentCopy(source, region, destination, region.getMinimumPoint())` + `Operations.completeLegacy` + `session.setClipboard(new ClipboardHolder(...))` | Mirrors WorldEdit's own `/copy` command (`command/ClipboardCommands.java`) exactly, including `clipboard.setOrigin(session.getPlacementPosition(actor))` |
-| Clipboard | `paste(actor, x, y, z)` | `ClipboardHolder.createPaste(Extent).to(BlockVector3).build()` + `Operations.completeLegacy` | Destination is an explicit typed x,y,z (not WorldEdit's placement-position heuristic), matching this repo's "1-to-1, no hidden defaults" design rule |
-| Schematics | `saveSchematic(actor, file)` / `loadSchematic(actor, file)` | `ClipboardFormats.findByFile(File)` + `ClipboardFormat.getWriter`/`getReader` | Format is inferred from the file extension exactly like WorldEdit's own CLI; an unrecognized extension is `400`, not a silent fallback |
+| Clipboard | `copy(actor, box)` | `BlockArrayClipboard(Region)` + `clipboard.setOrigin(region.getMinimumPoint())` + `ForwardExtentCopy(source, region, destination, region.getMinimumPoint())` + `Operations.completeLegacy` + `session.setClipboard(new ClipboardHolder(...))` | Origin is the box's own minimum corner - a fixed, typed input - not `session.getPlacementPosition(actor)` (WorldEdit's own `/copy` command default, which depends on hidden per-actor placement state); matches this repo's "1-to-1, no hidden defaults" design rule, and keeps `copy` fully self-contained (no placement setup needed first) |
+| Clipboard | `paste(actor, x, y, z)` | `ClipboardHolder.createPaste(Extent).to(BlockVector3).build()` + `Operations.completeLegacy` | Destination is an explicit typed x,y,z (not WorldEdit's placement-position heuristic either), same "no hidden defaults" rule as `copy` |
+| Schematics | `saveSchematic(actor, file)` / `loadSchematic(actor, file)` | `ClipboardFormats.findByFile(File)` (content detection, existing files only) falling back to `ClipboardFormats.findByAlias(extension)` (verified: `BuiltInClipboardFormat.SPONGE_V3_SCHEMATIC` registers `"schem"` as both its primary extension and an alias, `BuiltInClipboardFormat.java:135`) + `ClipboardFormat.getWriter`/`getReader` | `findByFile` alone (the first draft of this adapter) is wrong for saves: it opens and sniffs the file's *existing* content, which a new output file never has, so it always returned `null` and rejected every save. Format is now inferred from the file extension for a file that doesn't exist yet, with content-sniffing preferred when it does; an unrecognized extension is `400`, not a silent fallback |
 | History | `undo(actor)` / `redo(actor)` | `LocalSession.undo(BlockBag, Actor)` / `redo(...)` | Reuses WorldEdit's own per-actor history (`LocalSession`), not a separate undo queue |
 | Selection | `selection(actor)` | `LocalSession.getSelection(World)` → `Region.getMinimumPoint()`/`getMaximumPoint()` | Reports the **bounding box** of the active selection; exact only for a cuboid selector - a polygon/cylinder/convex selection is reported by its AABB, not its true shape (see gaps below) |
+| Edit-session construction | every edit-producing method (`setBlocks`, `replaceBlocks`, `copy`, `paste`) | `LocalSession.createEditSession(Actor)` (`LocalSession.java:1104-1127`), **never** `WorldEdit.newEditSession(Actor)` | The session-owned call is what applies the actor's configured block change limit, mask, world override and block bag; the bare `WorldEdit.newEditSession`/`EditSessionBuilder` path (the first draft of this adapter) silently ignores all of them (defaults to unlimited). Verified by a test that sets a session block-change limit and confirms an over-limit edit is rejected and never remembered |
 | Actor/session bookkeeping | every edit-producing method | `LocalSession.remember(EditSession)` after the edit | Replicates the bookkeeping WorldEdit's own command dispatcher performs centrally (`extension/platform/PlatformCommandManager.java:514`), since this adapter bypasses that dispatcher entirely |
+
+## Namespaced discovery/schema definitions
+
+`core/src/main/java/dev/herobrine/api/core/worldedit/WorldEditSchema.java` declares the typed, namespaced
+(`worldedit.*`) operation inventory - name, description and a `ParamDef` list per `WorldEditAdapter` method,
+built from this repo's existing schema types (`dev.herobrine.api.core.ParamDef`) so MINECRAFT-476 can attach
+real `ActionDef`/`ResourceDef` handlers to an already-typed parameter schema instead of re-deriving one. It is
+declarative data only: no `Function<Params, Object> handler`, no `ApiContext`/HTTP registration - building a
+real `ActionDef` needs a concrete platform `Actor`, which only the neoforge module can construct (MINECRAFT-476).
 
 ## Gaps - explicit, not silently dropped
 
 - **Exact non-cuboid selection shape** (polygon, cylinder, convex, ellipsoid selectors): only the bounding
   box is exposed. Exposing the true shape would require typed region subclasses per selector kind; not
   attempted here.
-- **Transforms** (rotate/flip/scale via `AffineTransform`), **brushes/tools**, **generation** (`//generate`,
-  `//sphere`, `//hollow*` outside plain fill), **structure void / biome-specific copy flags**, **entity
-  copy/paste flags**: real WorldEdit methods exist for these (seen while reading the sources) but are not
-  mapped to a contract method yet; add them with the same verified-signature discipline when a concrete use
-  case needs them.
+- **Transforms** (rotate/flip/scale via `AffineTransform`, applied via `ClipboardHolder.setTransform`/
+  `ForwardExtentCopy.setTransform` - real, verified signatures, see the matrix above), **brushes/tools**,
+  **generation** (`//generate`, `//sphere`, `//hollow*` outside plain fill), **structure void / biome-specific
+  copy flags**, **entity copy/paste flags**: real WorldEdit methods exist for these but are not mapped to a
+  contract method yet; add them with the same verified-signature discipline when a concrete use case needs them.
 - **Snapshots/rollback**, **scripting (CraftScripts)**, **tool binding** (super pickaxe, brushes): internal
   to interactive play; no API-level, non-command equivalent was found that fits this ticket's "typed method,
   not raw command" requirement.
-- **Actor construction**: `Actor` (and the `Locatable` bound `newEditSession` needs) is only an opaque
-  `Object` parameter here - the adapter never constructs one. Wrapping a Minecraft `ServerPlayer`/`LocalPlayer`
+- **Actor construction**: `Actor` is only an opaque `Object` parameter here - the adapter never constructs
+  one. `LocalSession.createEditSession(Actor)` (which this adapter does call) additionally checks whether the
+  actor implements `Locatable` to resolve a world override; whether MINECRAFT-476's eventual actor wrapper
+  satisfies `Locatable` is still the open question below. Wrapping a Minecraft `ServerPlayer`/`LocalPlayer`
   into a real WorldEdit `Actor` requires the neoforge module's own platform registration; that is
   MINECRAFT-476, not this ticket.
 - **World construction**: likewise, `com.sk89q.worldedit.world.World` instances (needed internally by
@@ -70,6 +82,9 @@ from general WorldEdit knowledge. Status for everything here is **Tested against
 
 ## Known open question
 - Whether `com.sk89q.worldedit.extension.platform.Actor` instances built by the neoforge module in
-  MINECRAFT-476 will also satisfy `Locatable` (required by the `newEditSession(A extends Actor & Locatable)`
-  shorthand this adapter calls) - the real WorldEdit neoforge platform almost certainly supplies this, but it
+  MINECRAFT-476 will also satisfy `Locatable`. This is now a soft dependency, not a hard one: this adapter
+  calls `LocalSession.createEditSession(Actor)` (not the `newEditSession(A extends Actor & Locatable)`
+  shorthand the first draft used), which only does a runtime `actor instanceof Locatable` check to resolve a
+  world override (`LocalSession.java:1106`) - a non-`Locatable` actor still works, it just can't supply a
+  world override this way. The real WorldEdit neoforge platform almost certainly supplies `Locatable`, but it
   was not verified here since no neoforge-side actor wrapper exists yet.

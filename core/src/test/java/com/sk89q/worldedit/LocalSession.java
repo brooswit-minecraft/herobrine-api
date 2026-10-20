@@ -5,6 +5,7 @@ import com.sk89q.worldedit.math.BlockVector3;
 import com.sk89q.worldedit.regions.Region;
 import com.sk89q.worldedit.session.ClipboardHolder;
 import com.sk89q.worldedit.world.World;
+import dev.herobrine.api.core.worldedit.FakeWorldEdit;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -16,6 +17,18 @@ public final class LocalSession {
     public World selectionWorld;
     public Region selectionRegion;
     public BlockVector3 placementPosition;
+    /** -1 = unlimited, mirrors {@code LocalSession.getBlockChangeLimit()}. */
+    public int blockChangeLimit = -1;
+
+    /**
+     * Mirrors the real {@code LocalSession.createEditSession(Actor)} (LocalSession.java:1104): the session
+     * is what applies the configured block change limit (and, in the real implementation, mask/world
+     * override/block bag), not a bare {@code WorldEdit.newEditSession(Actor)} builder.
+     */
+    public EditSession createEditSession(Actor actor) {
+        FakeWorldEdit.INSTANCE.calls.add("createEditSession:" + actor + ":maxBlocks=" + blockChangeLimit);
+        return new EditSession(actor, blockChangeLimit);
+    }
 
     public void remember(EditSession editSession) {
         while (historyPointer < history.size()) history.remove(historyPointer);
