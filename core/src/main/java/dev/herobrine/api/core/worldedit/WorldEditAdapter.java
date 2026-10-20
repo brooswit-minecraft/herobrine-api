@@ -67,4 +67,22 @@ public interface WorldEditAdapter {
      * other selection shapes (polygon, cylinder, ...) are reported by their bounding box.
      */
     Box selection(Object actor);
+
+    // ---- transforms (compose onto the actor's clipboard transform; affect the next paste(), not past
+    // pastes - this is WorldEdit's own //rotate and //flip semantics: non-destructive, stackable, applied
+    // at paste time via ClipboardHolder.getTransform()) ----
+
+    /**
+     * Rotates the actor's clipboard, in degrees, a positive angle meaning clockwise (WorldEdit's own
+     * {@code //rotate} convention). Not interpolated: each angle should be a multiple of 90. Composes with
+     * (stacks onto) any existing clipboard transform; takes effect on the next {@link #paste}.
+     */
+    void rotateClipboard(Object actor, double degreesY, double degreesX, double degreesZ);
+
+    /**
+     * Scales the actor's clipboard by the given per-axis factors (WorldEdit's own {@code //flip} is this
+     * with factors of 1 or -1). Composes with (stacks onto) any existing clipboard transform; takes effect
+     * on the next {@link #paste}.
+     */
+    void scaleClipboard(Object actor, double sx, double sy, double sz);
 }

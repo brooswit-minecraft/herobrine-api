@@ -32,6 +32,7 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
     private static final String CLIPBOARD_FORMATS = "com.sk89q.worldedit.extent.clipboard.io.ClipboardFormats";
     private static final String FORWARD_EXTENT_COPY = "com.sk89q.worldedit.function.operation.ForwardExtentCopy";
     private static final String OPERATIONS = "com.sk89q.worldedit.function.operation.Operations";
+    private static final String AFFINE_TRANSFORM = "com.sk89q.worldedit.math.transform.AffineTransform";
 
     // Checked exceptions worth translating into a specific ApiException rather than a generic 500.
     private static final String INCOMPLETE_REGION_EXCEPTION = "com.sk89q.worldedit.IncompleteRegionException";
@@ -249,6 +250,43 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
         Object max = invoke(region, "getMaximumPoint");
         return new Box((Integer) invoke(min, "getX"), (Integer) invoke(min, "getY"), (Integer) invoke(min, "getZ"),
                 (Integer) invoke(max, "getX"), (Integer) invoke(max, "getY"), (Integer) invoke(max, "getZ"));
+    }
+
+    // ---- transforms ----
+
+    /**
+     * Mirrors WorldEdit's own {@code /rotate} command exactly (verified: {@code
+     * command/ClipboardCommands.java:233-238}): build a fresh {@code AffineTransform}, negate each angle
+     * before passing it to {@code rotateY}/{@code rotateX}/{@code rotateZ} (so a positive input angle reads
+     * as clockwise, matching the command's own documented convention), then compose it onto the clipboard's
+     * existing transform with {@code existingTransform.combine(newTransform)} and write that back.
+     */
+    @Override public void rotateClipboard(Object actor, double degreesY, double degreesX, double degreesZ) {
+        Object we = worldEdit();
+        Object session = session(we, actor);
+        Object holder = invokeTranslating(session, "getClipboard", EMPTY_CLIPBOARD_EXCEPTION, "No clipboard is set");
+        Object transform = create(AFFINE_TRANSFORM);
+        transform = invoke(transform, "rotateY", -degreesY);
+        transform = invoke(transform, "rotateX", -degreesX);
+        transform = invoke(transform, "rotateZ", -degreesZ);
+        composeTransform(holder, transform);
+    }
+
+    /** Mirrors WorldEdit's own {@code /flip} command's mechanism (verified: {@code
+     * command/ClipboardCommands.java:253-254}), generalized from a +/-1 flip to arbitrary per-axis factors. */
+    @Override public void scaleClipboard(Object actor, double sx, double sy, double sz) {
+        Object we = worldEdit();
+        Object session = session(we, actor);
+        Object holder = invokeTranslating(session, "getClipboard", EMPTY_CLIPBOARD_EXCEPTION, "No clipboard is set");
+        Object transform = create(AFFINE_TRANSFORM);
+        transform = invoke(transform, "scale", sx, sy, sz);
+        composeTransform(holder, transform);
+    }
+
+    private void composeTransform(Object holder, Object transform) {
+        Object existing = invoke(holder, "getTransform");
+        Object combined = invoke(existing, "combine", transform);
+        invoke(holder, "setTransform", combined);
     }
 
     // ---- shared construction helpers ----

@@ -54,7 +54,19 @@ public final class WorldEditSchema {
                     List.of(ParamDef.required("file", "string", "Schematic file name"))),
             new Operation("worldedit.selection",
                     "Axis-aligned bounding box of the actor's current selection (WorldEditAdapter#selection)",
-                    List.of()));
+                    List.of()),
+            new Operation("worldedit.rotate_clipboard",
+                    "Rotate the actor's clipboard in degrees, clockwise; takes effect on the next paste (WorldEditAdapter#rotateClipboard)",
+                    List.of(
+                            ParamDef.required("degreesY", "number", "Rotation about the y-axis, in degrees"),
+                            ParamDef.optional("degreesX", "number", "Rotation about the x-axis, in degrees", 0),
+                            ParamDef.optional("degreesZ", "number", "Rotation about the z-axis, in degrees", 0))),
+            new Operation("worldedit.scale_clipboard",
+                    "Scale the actor's clipboard by per-axis factors; takes effect on the next paste (WorldEditAdapter#scaleClipboard)",
+                    List.of(
+                            ParamDef.required("sx", "number", "X-axis scale factor"),
+                            ParamDef.required("sy", "number", "Y-axis scale factor"),
+                            ParamDef.required("sz", "number", "Z-axis scale factor"))));
 
     private static List<ParamDef> concat(List<ParamDef> base, ParamDef... extra) {
         var out = new java.util.ArrayList<>(base);

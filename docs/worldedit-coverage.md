@@ -36,7 +36,8 @@ from general WorldEdit knowledge. Status for everything here is **Tested against
 | Edits | `setBlocks(actor, box, pattern)` | `EditSession.setBlocks(Region, Pattern)` | Region is a `CuboidRegion` built from the box; `Pattern` parsed via `WorldEdit.getPatternFactory().parseFromInput` (WorldEdit's own pattern syntax, e.g. `stone`, `50%stone,50%dirt`) |
 | Edits | `replaceBlocks(actor, box, mask, pattern)` | `EditSession.replaceBlocks(Region, Mask, Pattern)` | `Mask` parsed via `WorldEdit.getMaskFactory().parseFromInput` (WorldEdit's own mask syntax, e.g. `stone,dirt`) |
 | Regions | `WorldEditAdapter.Box` → `CuboidRegion(BlockVector3, BlockVector3)` | — | Only cuboid regions are constructed by this adapter; arbitrary/irregular selections are only *read* (see Selection) |
-| Transforms | — (not implemented; signatures verified) | `math/transform/AffineTransform.java`: `rotateX(double theta)` / `rotateY(double theta)` / `rotateZ(double theta)` / `scale(double s)` / `scale(double sx, double sy, double sz)` / `translate(double x, double y, double z)`; applied via `ClipboardHolder.setTransform(Transform)` before `createPaste` (clipboard paste) or `ForwardExtentCopy.setTransform(Transform)` (copy) | Real, public, verified methods exist (not a guess); not wired into `WorldEditAdapter` because it needs a concrete use case to pick the right contract shape (degrees vs. radians param naming, rotate-only vs. full affine) - add with the same verified-signature discipline when MINECRAFT-476 or a later ticket needs it |
+| Transforms | `rotateClipboard(actor, degreesY, degreesX, degreesZ)` | `AffineTransform` (fresh instance) → `rotateY(-degreesY)` → `rotateX(-degreesX)` → `rotateZ(-degreesZ)` → `existingTransform.combine(newTransform)` → `ClipboardHolder.setTransform` | Mirrors WorldEdit's own `/rotate` command exactly (verified: `command/ClipboardCommands.java:233-238`, including the angle negation that makes a positive input angle read as clockwise); non-destructive and stackable, takes effect on the next `paste`, not past ones |
+| Transforms | `scaleClipboard(actor, sx, sy, sz)` | `AffineTransform.scale(sx, sy, sz)` → `existingTransform.combine(newTransform)` → `ClipboardHolder.setTransform` | Generalizes WorldEdit's own `/flip` command mechanism (verified: `command/ClipboardCommands.java:253-254`, which calls the same `scale` with +/-1 factors) to arbitrary per-axis factors |
 | Masks / patterns | pattern & mask string parameters on edit methods | `PatternFactory`/`MaskFactory extends AbstractFactory<E>.parseFromInput(String, ParserContext)` | Reuses WorldEdit's own parser/grammar instead of a parallel one; malformed input surfaces as `400 BAD_REQUEST`, not a crash |
 | Clipboard | `copy(actor, box)` | `BlockArrayClipboard(Region)` + `clipboard.setOrigin(region.getMinimumPoint())` + `ForwardExtentCopy(source, region, destination, region.getMinimumPoint())` + `Operations.completeLegacy` + `session.setClipboard(new ClipboardHolder(...))` | Origin is the box's own minimum corner - a fixed, typed input - not `session.getPlacementPosition(actor)` (WorldEdit's own `/copy` command default, which depends on hidden per-actor placement state); matches this repo's "1-to-1, no hidden defaults" design rule, and keeps `copy` fully self-contained (no placement setup needed first) |
 | Clipboard | `paste(actor, x, y, z)` | `ClipboardHolder.createPaste(Extent).to(BlockVector3).build()` + `Operations.completeLegacy` | Destination is an explicit typed x,y,z (not WorldEdit's placement-position heuristic either), same "no hidden defaults" rule as `copy` |
@@ -55,19 +56,35 @@ real `ActionDef`/`ResourceDef` handlers to an already-typed parameter schema ins
 declarative data only: no `Function<Params, Object> handler`, no `ApiContext`/HTTP registration - building a
 real `ActionDef` needs a concrete platform `Actor`, which only the neoforge module can construct (MINECRAFT-476).
 
-## Gaps - explicit, not silently dropped
+## Gaps - explicit, not silently dropped, and split by why they're gaps
 
+A prior draft of this doc lumped "real API exists but isn't mapped yet" together with "no clean API
+exists at all" under one vague "deferred" bucket - called out in review as needing to distinguish
+discretionary deferrals (still public, still in scope, just not mapped to a contract method *yet*) from
+genuinely unsupported ones (no non-interactive, non-command API exists for this ticket's "typed method, not
+raw command" requirement to map to). Transforms (rotate/scale) were in the first bucket and are now
+implemented (see the matrix above); everything below is sorted into one bucket or the other, not left vague.
+
+**Discretionary deferrals - real, public, verified methods exist; not mapped to a contract method yet:**
+- **Generation shapes**: `EditSession.makeSphere(BlockVector3, Pattern, double, boolean)` (and the
+  5-arg ellipsoid overload), `makeCylinder(BlockVector3, Pattern, double, int, boolean)` (and the elliptical
+  overload), `makePyramid(BlockVector3, Pattern, int, boolean)`, `hollowOutRegion(Region, int, Pattern)` -
+  all verified public methods on `EditSession.java`, the same class `setBlocks`/`replaceBlocks` already use.
+- **Paste flags**: `PasteBuilder.ignoreAirBlocks`/`ignoreStructureVoidBlocks`/`copyEntities`/`copyBiomes`
+  (verified: `session/PasteBuilder.java`) - `paste()` here always uses the builder's defaults.
 - **Exact non-cuboid selection shape** (polygon, cylinder, convex, ellipsoid selectors): only the bounding
-  box is exposed. Exposing the true shape would require typed region subclasses per selector kind; not
-  attempted here.
-- **Transforms** (rotate/flip/scale via `AffineTransform`, applied via `ClipboardHolder.setTransform`/
-  `ForwardExtentCopy.setTransform` - real, verified signatures, see the matrix above), **brushes/tools**,
-  **generation** (`//generate`, `//sphere`, `//hollow*` outside plain fill), **structure void / biome-specific
-  copy flags**, **entity copy/paste flags**: real WorldEdit methods exist for these but are not mapped to a
-  contract method yet; add them with the same verified-signature discipline when a concrete use case needs them.
-- **Snapshots/rollback**, **scripting (CraftScripts)**, **tool binding** (super pickaxe, brushes): internal
-  to interactive play; no API-level, non-command equivalent was found that fits this ticket's "typed method,
-  not raw command" requirement.
+  box is exposed; the real non-cuboid `Region` subclasses exist, but exposing their true shape needs a typed
+  region-per-selector-kind contract shape, not attempted here.
+
+Add any of these with the same verified-signature discipline as everything else in this adapter, when a
+concrete use case needs them - this list is the "remaining integration dependencies" the ticket's
+acceptance criteria asks to name explicitly.
+
+**Genuinely unsupported for this ticket's "typed method, not raw command" contract:**
+- **Snapshots/rollback**, **scripting (CraftScripts)**, **tool binding** (super pickaxe, brushes, held-item
+  triggered brush strokes): all built around an interactive play loop (equip a tool, click a block, repeat) or
+  an admin snapshot/rollback workflow; no one-shot, non-command, non-interactive public API equivalent was
+  found that fits a single typed call the way `setBlocks` or `rotateClipboard` do.
 - **Actor construction**: `Actor` is only an opaque `Object` parameter here - the adapter never constructs
   one. `LocalSession.createEditSession(Actor)` (which this adapter does call) additionally checks whether the
   actor implements `Locatable` to resolve a world override; whether MINECRAFT-476's eventual actor wrapper

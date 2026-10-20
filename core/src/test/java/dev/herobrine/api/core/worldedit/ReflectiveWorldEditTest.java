@@ -133,6 +133,24 @@ class ReflectiveWorldEditTest {
         assertTrue(FakeWorldEdit.INSTANCE.calls.stream().anyMatch(c -> c.startsWith("completeLegacy:Paste(")));
     }
 
+    @Test void rotateClipboardRequiresAClipboardAndNegatesAnglesForClockwiseConvention() {
+        ApiException e = assertThrows(ApiException.class, () -> a.rotateClipboard(actor, 90, 0, 0));
+        assertEquals("BAD_REQUEST", e.code);
+
+        a.copy(actor, new Box(0, 0, 0, 1, 1, 1));
+        a.rotateClipboard(actor, 90, 45, 0);
+        var transform = session().clipboard.getTransform();
+        assertEquals("AffineTransform[rotateY(-90.0), rotateX(-45.0), rotateZ(-0.0)]", transform.toString());
+    }
+
+    @Test void scaleClipboardComposesOntoAnyExistingTransform() {
+        a.copy(actor, new Box(0, 0, 0, 1, 1, 1));
+        a.rotateClipboard(actor, 90, 0, 0);
+        a.scaleClipboard(actor, -1, 1, 1);
+        var transform = session().clipboard.getTransform();
+        assertEquals("AffineTransform[rotateY(-90.0), rotateX(-0.0), rotateZ(-0.0), scale(-1.0,1.0,1.0)]", transform.toString());
+    }
+
     @Test void selectionReportsTheBoundingBoxOfACuboidSelection() {
         ApiException e = assertThrows(ApiException.class, () -> a.selection(actor));
         assertEquals("BAD_REQUEST", e.code);

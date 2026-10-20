@@ -18,7 +18,7 @@ class WorldEditSchemaTest {
                 assertFalse(p.type().isBlank());
             }
         }
-        assertEquals(9, WorldEditSchema.OPERATIONS.size());
+        assertEquals(11, WorldEditSchema.OPERATIONS.size());
     }
 
     @Test void boxOperationsDeclareAllSixCorners() {
