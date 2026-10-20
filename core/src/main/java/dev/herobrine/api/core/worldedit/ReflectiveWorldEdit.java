@@ -388,13 +388,23 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
         return setBlocks(actor, inner, pattern);
     }
 
-    /** @return the box shrunk by {@code thickness} on every axis, or null if that inverts any axis. */
+    /**
+     * @return the box shrunk by {@code thickness} on every axis, or null if that leaves no interior.
+     * Requires {@code thickness >= 0} (checked by the only caller). Computed in {@code long} so an extreme
+     * {@code thickness} (e.g. near {@code Integer.MAX_VALUE}) cannot silently wrap a plain {@code int}
+     * computation around into a different, wrong-but-plausible-looking box instead of correctly reporting
+     * "no interior": with {@code thickness >= 0}, {@code box.minX() + thickness} and
+     * {@code box.maxX() - thickness} never overflow as {@code long}, so the {@code minX > maxX} comparison
+     * is always exact; and whenever it's false, both bounds are sandwiched inside the original box's own
+     * int-ranged bounds ({@code box.minX() <= minX <= maxX <= box.maxX()}), so narrowing the surviving
+     * result back to {@code int} is always safe.
+     */
     private Box shrink(Box box, int thickness) {
-        int minX = box.minX() + thickness, maxX = box.maxX() - thickness;
-        int minY = box.minY() + thickness, maxY = box.maxY() - thickness;
-        int minZ = box.minZ() + thickness, maxZ = box.maxZ() - thickness;
+        long minX = (long) box.minX() + thickness, maxX = (long) box.maxX() - thickness;
+        long minY = (long) box.minY() + thickness, maxY = (long) box.maxY() - thickness;
+        long minZ = (long) box.minZ() + thickness, maxZ = (long) box.maxZ() - thickness;
         if (minX > maxX || minY > maxY || minZ > maxZ) return null;
-        return new Box(minX, minY, minZ, maxX, maxY, maxZ);
+        return new Box((int) minX, (int) minY, (int) minZ, (int) maxX, (int) maxY, (int) maxZ);
     }
 
     // ---- transforms ----

@@ -231,6 +231,19 @@ class ReflectiveWorldEditTest {
         assertTrue(session().history.isEmpty()); // no edit session was even created
     }
 
+    @Test void hollowOutBoxWithExtremeThicknessStillChangesNothingRatherThanOverflow() {
+        // A naive `int` shrink (box.minX() + thickness) silently wraps around near Integer.MAX_VALUE,
+        // turning "no interior" into a different, wrong-but-plausible-looking box instead of correctly
+        // reporting no interior at all. shrink() computes in `long` specifically to rule this out.
+        int changed = a.hollowOutBox(actor, new Box(0, 0, 0, 2, 2, 2), Integer.MAX_VALUE, "stone");
+        assertEquals(0, changed);
+        assertTrue(session().history.isEmpty());
+
+        ApiException e = assertThrows(ApiException.class,
+                () -> a.hollowOutBox(actor, new Box(0, 0, 0, 2, 2, 2), -1, "stone"));
+        assertEquals("BAD_REQUEST", e.code);
+    }
+
     @Test void pasteDefaultsMatchWorldEditsOwnBuilderDefaults() {
         a.copy(actor, new Box(0, 0, 0, 1, 1, 1));
         a.paste(actor, 1, 2, 3);
