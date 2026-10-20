@@ -316,6 +316,18 @@ class ReflectiveWorldEditTest {
         assertEquals("BAD_REQUEST", e.code);
     }
 
+    @Test void convexHullEditsRejectExactlyThreeCoplanarVerticesNotJustTooFew() {
+        // Verified against the real ConvexPolyhedralRegion.addVertex: exactly 3 vertices already produce 2
+        // (coincident, back-to-back, zero-volume) triangles, so the real isDefined() ("!triangles.isEmpty()")
+        // would incorrectly read true here - this is exactly the degenerate case isDefined() alone misses.
+        var threeCoplanar = new WorldEditAdapter.ConvexHull(java.util.List.of(
+                new WorldEditAdapter.Vertex(0, 0, 0),
+                new WorldEditAdapter.Vertex(4, 0, 0),
+                new WorldEditAdapter.Vertex(0, 4, 0)));
+        ApiException e = assertThrows(ApiException.class, () -> a.setBlocks(actor, threeCoplanar, "stone"));
+        assertEquals("BAD_REQUEST", e.code);
+    }
+
     @Test void convexHullEditsBuildAConvexPolyhedralRegion() {
         var hull = new WorldEditAdapter.ConvexHull(java.util.List.of(
                 new WorldEditAdapter.Vertex(0, 0, 0),

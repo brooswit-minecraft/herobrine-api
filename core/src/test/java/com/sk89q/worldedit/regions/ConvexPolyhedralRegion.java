@@ -8,10 +8,14 @@ import java.util.List;
 
 /**
  * Test double mirroring the real ConvexPolyhedralRegion's verified shape: single {@code World}-param ctor
- * (world may be null), repeated {@code addVertex}, and {@code isDefined()} only becoming true once enough
- * vertices form a real hull (the real class needs a 4th non-coplanar vertex before any triangle exists;
- * this fake simplifies that to "at least 4 vertices", sufficient to prove the adapter's own validity check
- * rather than re-implementing real 3D convex-hull geometry).
+ * (world may be null), repeated {@code addVertex}, and {@code getTriangles()} - which the adapter checks
+ * instead of {@code isDefined()} (verified: the real {@code isDefined()} is just {@code !triangles.isEmpty()},
+ * true already at exactly 3 (degenerate, coplanar) vertices - see {@code ReflectiveWorldEdit.convexHullRegion}'s
+ * javadoc for the full citation). This fake simplifies the real triangle count (exactly 2 for a 3-vertex
+ * degenerate hull, 4 once a real, non-coplanar 4th vertex exists - verified in the real {@code addVertex}'s
+ * {@code case 3}/{@code default} branches) to "fewer than 4 vertices total means still degenerate," which is
+ * sufficient to prove the adapter reads the triangle count rather than vertex count, without re-implementing
+ * real 3D convex-hull/coplanarity geometry.
  */
 public final class ConvexPolyhedralRegion implements Region {
     private final List<BlockVector3> vertices = new ArrayList<>();
@@ -19,8 +23,15 @@ public final class ConvexPolyhedralRegion implements Region {
     public ConvexPolyhedralRegion(World world) {}
 
     public boolean addVertex(BlockVector3 vertex) { return vertices.add(vertex); }
-    public boolean isDefined() { return vertices.size() >= 4; }
     public Collection<BlockVector3> getVertices() { return vertices; }
+
+    /** @return a collection sized 0 (0-2 vertices), 2 (exactly 3, degenerate) or 4 (4+, a real hull). */
+    public Collection<Object> getTriangles() {
+        int n = vertices.size() >= 4 ? 4 : (vertices.size() == 3 ? 2 : 0);
+        List<Object> fakeTriangles = new ArrayList<>();
+        for (int i = 0; i < n; i++) fakeTriangles.add(new Object());
+        return fakeTriangles;
+    }
 
     @Override public BlockVector3 getMinimumPoint() {
         int minX = vertices.stream().mapToInt(BlockVector3::getX).min().orElse(0);

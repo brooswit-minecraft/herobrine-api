@@ -152,14 +152,16 @@ public interface WorldEditAdapter {
     /**
      * A convex polyhedron defined by its vertices (at least 4, not all coplanar). Maps exactly to a WorldEdit
      * {@code ConvexPolyhedralRegion} - verified world-independent (its constructor's {@code World} parameter
-     * is {@code @Nullable}), built via repeated {@code addVertex(BlockVector3)}. Too few (or all-coplanar)
-     * vertices leave the region {@code isDefined() == false} (verified: triangles only form once a 4th,
-     * non-coplanar vertex is added) - a {@code BAD_REQUEST}, not silently a no-op or a crash.
+     * is {@code @Nullable}), built via repeated {@code addVertex(BlockVector3)}. Too few, or all-coplanar,
+     * vertices are rejected as {@code BAD_REQUEST} rather than silently a no-op or a crash - checked via the
+     * region's resulting triangle count (verified: a degenerate/coplanar input always yields exactly 2
+     * coincident triangles, never more, regardless of vertex count; {@code isDefined()} alone is not
+     * sufficient, since it is {@code true} already at that same degenerate 2-triangle state).
      */
     record ConvexHull(List<Vertex> vertices) {}
 
     /** Fills a convex hull with a pattern. @return the number of blocks changed
-     *  @throws dev.herobrine.api.core.ApiException BAD_REQUEST if the hull is degenerate (not {@code isDefined()}) */
+     *  @throws dev.herobrine.api.core.ApiException BAD_REQUEST if the hull is degenerate (2 or fewer triangular faces) */
     int setBlocks(Object actor, ConvexHull hull, String pattern);
     /** Replaces blocks matching a mask with a pattern inside a convex hull. @return the number of blocks changed */
     int replaceBlocks(Object actor, ConvexHull hull, String mask, String pattern);

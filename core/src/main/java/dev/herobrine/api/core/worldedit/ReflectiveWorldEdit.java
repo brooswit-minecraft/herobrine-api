@@ -465,15 +465,24 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
 
     /**
      * Builds a {@code ConvexPolyhedralRegion} with a null {@code World} (its constructor parameter is
-     * verified {@code @Nullable}) via repeated {@code addVertex(BlockVector3)}, then checks
-     * {@code isDefined()} - verified: triangles (and so a non-degenerate hull) only form once a 4th,
-     * non-coplanar vertex is added ({@code ConvexPolyhedralRegion.addVertex}); too few or all-coplanar
-     * vertices leave {@code isDefined() == false} and {@code getMinimumPoint()}/{@code getMaximumPoint()}
-     * null, which would NPE deep inside {@code EditSession} rather than fail cleanly, so this checks first.
-     * The single constructor's only parameter type is {@code World}, but {@code ConvexPolyhedralRegion}
-     * also has a copy-constructor taking another {@code ConvexPolyhedralRegion} - both take one non-primitive
-     * argument, so passing a literal {@code null} through the generic {@link #create} helper would be
-     * ambiguous between them; this looks up the {@code World}-parameter constructor explicitly instead.
+     * verified {@code @Nullable}) via repeated {@code addVertex(BlockVector3)}.
+     * <p>Does <b>not</b> validate with {@code isDefined()} - verified that check is too weak:
+     * {@code isDefined()} is just {@code !triangles.isEmpty()}, and {@code addVertex} already adds two
+     * (coincident, back-to-back, zero-volume) triangles once exactly 3 vertices exist
+     * ({@code ConvexPolyhedralRegion.java}, the {@code case 3} branch) - before any 4th vertex, coplanar or
+     * not. A 4th vertex that's coplanar with the first 3 is routed to an internal backlog instead of
+     * expanding the hull ({@code containsRaw(vertexD)} check, same file), leaving {@code triangles} at
+     * exactly those same 2 - so {@code isDefined()} reads {@code true} for a flat, degenerate input and
+     * would let a zero-volume region through. A genuinely non-coplanar 4th vertex instead removes the one
+     * triangle facing it and adds 3 new ones in its place (net 2 - 1 + 3 = 4, verified in the same method's
+     * {@code default:} branch), so a real (non-degenerate) hull always has strictly more than 2 triangular
+     * faces. Checking {@code getTriangles().size() > 2} is therefore the verified-correct non-degeneracy
+     * test, not {@code isDefined()}.
+     * <p>Separately: the single constructor's only parameter type is {@code World}, but
+     * {@code ConvexPolyhedralRegion} also has a copy-constructor taking another {@code ConvexPolyhedralRegion}
+     * - both take one non-primitive argument, so passing a literal {@code null} through the generic
+     * {@link #create} helper would be ambiguous between them; this looks up the {@code World}-parameter
+     * constructor explicitly instead.
      */
     private Object convexHullRegion(ConvexHull hull) {
         Object region;
@@ -485,7 +494,8 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
         for (Vertex v : hull.vertices()) {
             invoke(region, "addVertex", blockVector3(v.x(), v.y(), v.z()));
         }
-        if (!Boolean.TRUE.equals(invoke(region, "isDefined"))) {
+        Object triangles = invoke(region, "getTriangles");
+        if (!(triangles instanceof java.util.Collection<?> c) || c.size() <= 2) {
             throw ApiException.badRequest("Convex hull is degenerate (needs at least 4 non-coplanar vertices)");
         }
         return region;
