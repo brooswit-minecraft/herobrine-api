@@ -33,6 +33,22 @@ public final class WorldEditSchema {
             ParamDef.required("minY", "integer", "Minimum Y, inclusive"),
             ParamDef.required("maxY", "integer", "Maximum Y, inclusive"));
 
+    private static final List<ParamDef> POLYGON_PARAMS = List.of(
+            ParamDef.required("points", "array", "Footprint vertices in the X/Z plane, e.g. [{\"x\":0,\"z\":0}, ...] - at least 3"),
+            ParamDef.required("minY", "integer", "Minimum Y, inclusive"),
+            ParamDef.required("maxY", "integer", "Maximum Y, inclusive"));
+
+    private static final List<ParamDef> ELLIPSOID_PARAMS = List.of(
+            ParamDef.required("centerX", "integer", "Ellipsoid center X"),
+            ParamDef.required("centerY", "integer", "Ellipsoid center Y"),
+            ParamDef.required("centerZ", "integer", "Ellipsoid center Z"),
+            ParamDef.required("radiusX", "number", "Radius along the X axis"),
+            ParamDef.required("radiusY", "number", "Radius along the Y axis"),
+            ParamDef.required("radiusZ", "number", "Radius along the Z axis"));
+
+    private static final List<ParamDef> CONVEX_HULL_PARAMS = List.of(
+            ParamDef.required("vertices", "array", "Convex hull vertices, e.g. [{\"x\":0,\"y\":0,\"z\":0}, ...] - at least 4, not all coplanar"));
+
     private static final List<ParamDef> PASTE_OPTION_PARAMS = List.of(
             ParamDef.optional("ignoreAirBlocks", "boolean", "Skip air blocks from the source", false),
             ParamDef.optional("ignoreStructureVoidBlocks", "boolean", "Skip structure-void blocks from the source", false),
@@ -128,7 +144,52 @@ public final class WorldEditSchema {
                     "Leave a shell of `thickness` blocks at the box's boundary untouched, and replace every block in the interior with a pattern (WorldEditAdapter#hollowOutBox)",
                     concat(BOX_PARAMS,
                             ParamDef.required("thickness", "integer", "Shell thickness (manhattan distance)"),
-                            ParamDef.required("pattern", "string", "WorldEdit pattern syntax"))));
+                            ParamDef.required("pattern", "string", "WorldEdit pattern syntax"))),
+            new Operation("worldedit.copy_cylinder",
+                    "Copy a cylindrical region into the actor's clipboard, origin at its own bounding-box minimum corner (WorldEditAdapter#copy(Object, Cylinder))",
+                    CYLINDER_PARAMS),
+            new Operation("worldedit.set_blocks_polygon",
+                    "Fill a polygon footprint (extruded vertically) with a pattern (WorldEditAdapter#setBlocks(Object, Polygon, String))",
+                    concat(POLYGON_PARAMS, ParamDef.required("pattern", "string", "WorldEdit pattern syntax"))),
+            new Operation("worldedit.replace_blocks_polygon",
+                    "Replace blocks matching a mask with a pattern inside a polygon footprint (WorldEditAdapter#replaceBlocks(Object, Polygon, String, String))",
+                    concat(POLYGON_PARAMS,
+                            ParamDef.required("mask", "string", "WorldEdit mask syntax"),
+                            ParamDef.required("pattern", "string", "WorldEdit pattern syntax"))),
+            new Operation("worldedit.copy_polygon",
+                    "Copy a polygon footprint into the actor's clipboard, origin at its own bounding-box minimum corner (WorldEditAdapter#copy(Object, Polygon))",
+                    POLYGON_PARAMS),
+            new Operation("worldedit.polygon_selection",
+                    "The actor's current selection as a polygon footprint, only when the selector is exactly a Polygonal2DRegion (WorldEditAdapter#polygonSelection)",
+                    List.of()),
+            new Operation("worldedit.set_blocks_ellipsoid",
+                    "Fill an ellipsoid with a pattern (WorldEditAdapter#setBlocks(Object, Ellipsoid, String))",
+                    concat(ELLIPSOID_PARAMS, ParamDef.required("pattern", "string", "WorldEdit pattern syntax"))),
+            new Operation("worldedit.replace_blocks_ellipsoid",
+                    "Replace blocks matching a mask with a pattern inside an ellipsoid (WorldEditAdapter#replaceBlocks(Object, Ellipsoid, String, String))",
+                    concat(ELLIPSOID_PARAMS,
+                            ParamDef.required("mask", "string", "WorldEdit mask syntax"),
+                            ParamDef.required("pattern", "string", "WorldEdit pattern syntax"))),
+            new Operation("worldedit.copy_ellipsoid",
+                    "Copy an ellipsoid into the actor's clipboard, origin at its own bounding-box minimum corner (WorldEditAdapter#copy(Object, Ellipsoid))",
+                    ELLIPSOID_PARAMS),
+            new Operation("worldedit.ellipsoid_selection",
+                    "The actor's current selection as an ellipsoid, only when the selector is exactly an EllipsoidRegion (WorldEditAdapter#ellipsoidSelection)",
+                    List.of()),
+            new Operation("worldedit.set_blocks_convex_hull",
+                    "Fill a convex hull with a pattern (WorldEditAdapter#setBlocks(Object, ConvexHull, String))",
+                    concat(CONVEX_HULL_PARAMS, ParamDef.required("pattern", "string", "WorldEdit pattern syntax"))),
+            new Operation("worldedit.replace_blocks_convex_hull",
+                    "Replace blocks matching a mask with a pattern inside a convex hull (WorldEditAdapter#replaceBlocks(Object, ConvexHull, String, String))",
+                    concat(CONVEX_HULL_PARAMS,
+                            ParamDef.required("mask", "string", "WorldEdit mask syntax"),
+                            ParamDef.required("pattern", "string", "WorldEdit pattern syntax"))),
+            new Operation("worldedit.copy_convex_hull",
+                    "Copy a convex hull into the actor's clipboard, origin at its own bounding-box minimum corner (WorldEditAdapter#copy(Object, ConvexHull))",
+                    CONVEX_HULL_PARAMS),
+            new Operation("worldedit.convex_hull_selection",
+                    "The actor's current selection as a convex hull, only when the selector is exactly a ConvexPolyhedralRegion (WorldEditAdapter#convexHullSelection)",
+                    List.of()));
 
     private static List<ParamDef> concat(List<ParamDef> base, ParamDef... extra) {
         var out = new java.util.ArrayList<>(base);

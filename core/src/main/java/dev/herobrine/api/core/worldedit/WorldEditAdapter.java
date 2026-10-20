@@ -1,6 +1,7 @@
 package dev.herobrine.api.core.worldedit;
 
 import java.io.File;
+import java.util.List;
 
 /**
  * Typed facade over WorldEdit's published Java API (com.sk89q.worldedit.*), verified against WorldEdit
@@ -89,6 +90,88 @@ public interface WorldEditAdapter {
      * @throws dev.herobrine.api.core.ApiException BAD_REQUEST if there's no selection, or the selector isn't a cylinder
      */
     Cylinder cylinderSelection(Object actor);
+
+    /** Copies the cylinder into the actor's clipboard, origin at the cylinder's own bounding-box minimum corner. */
+    void copy(Object actor, Cylinder cylinder);
+
+    /** One point of a {@link Polygon}'s footprint, in the X/Z plane. */
+    record Point2D(int x, int z) {}
+
+    /**
+     * A polygon footprint (at least 3 points, in the X/Z plane) extruded through a vertical range minY..maxY
+     * (inclusive). Maps exactly to a WorldEdit {@code Polygonal2DRegion} - verified world-independent:
+     * {@code Polygonal2DRegion()} (no-arg ctor), then {@code addPoint(BlockVector2)} per point and
+     * {@code setMinimumY}/{@code setMaximumY}; {@code AbstractRegion.getWorldMinY/getWorldMaxY} gracefully
+     * default to {@code Integer.MIN_VALUE}/{@code MAX_VALUE} when there is no {@code World} (there never is
+     * one here - no actor/world construction, per MINECRAFT-476).
+     */
+    record Polygon(List<Point2D> points, int minY, int maxY) {}
+
+    /** Fills a polygon footprint (extruded vertically) with a pattern. @return the number of blocks changed
+     *  @throws dev.herobrine.api.core.ApiException BAD_REQUEST if fewer than 3 points are given */
+    int setBlocks(Object actor, Polygon polygon, String pattern);
+    /** Replaces blocks matching a mask with a pattern inside a polygon footprint. @return the number of blocks changed */
+    int replaceBlocks(Object actor, Polygon polygon, String mask, String pattern);
+    /** Copies the polygon into the actor's clipboard, origin at its own bounding-box minimum corner. */
+    void copy(Object actor, Polygon polygon);
+
+    /**
+     * The actor's current selection reported as a polygon footprint, only when the selector is exactly a
+     * Polygonal2DRegion.
+     * @throws dev.herobrine.api.core.ApiException BAD_REQUEST if there's no selection, or the selector isn't a polygon
+     */
+    Polygon polygonSelection(Object actor);
+
+    /**
+     * An axis-aligned ellipsoid (a sphere when the radii are equal), centered at x,y,z. Maps exactly to a
+     * WorldEdit {@code EllipsoidRegion} - verified world-independent 2-arg constructor
+     * {@code EllipsoidRegion(BlockVector3 center, Vector3 radius)} (its single-{@code BlockVector3}-param
+     * javadoc calls the arguments "pos1"/"pos2", which reads like two corners, but the constructor body
+     * delegates as {@code center, radius} - verified by reading the body, not assumed from the parameter
+     * names).
+     */
+    record Ellipsoid(int centerX, int centerY, int centerZ, double radiusX, double radiusY, double radiusZ) {}
+
+    /** Fills an ellipsoid with a pattern. @return the number of blocks changed */
+    int setBlocks(Object actor, Ellipsoid ellipsoid, String pattern);
+    /** Replaces blocks matching a mask with a pattern inside an ellipsoid. @return the number of blocks changed */
+    int replaceBlocks(Object actor, Ellipsoid ellipsoid, String mask, String pattern);
+    /** Copies the ellipsoid into the actor's clipboard, origin at its own bounding-box minimum corner. */
+    void copy(Object actor, Ellipsoid ellipsoid);
+
+    /**
+     * The actor's current selection reported as an ellipsoid, only when the selector is exactly an
+     * EllipsoidRegion.
+     * @throws dev.herobrine.api.core.ApiException BAD_REQUEST if there's no selection, or the selector isn't an ellipsoid
+     */
+    Ellipsoid ellipsoidSelection(Object actor);
+
+    /** One vertex of a {@link ConvexHull}. */
+    record Vertex(int x, int y, int z) {}
+
+    /**
+     * A convex polyhedron defined by its vertices (at least 4, not all coplanar). Maps exactly to a WorldEdit
+     * {@code ConvexPolyhedralRegion} - verified world-independent (its constructor's {@code World} parameter
+     * is {@code @Nullable}), built via repeated {@code addVertex(BlockVector3)}. Too few (or all-coplanar)
+     * vertices leave the region {@code isDefined() == false} (verified: triangles only form once a 4th,
+     * non-coplanar vertex is added) - a {@code BAD_REQUEST}, not silently a no-op or a crash.
+     */
+    record ConvexHull(List<Vertex> vertices) {}
+
+    /** Fills a convex hull with a pattern. @return the number of blocks changed
+     *  @throws dev.herobrine.api.core.ApiException BAD_REQUEST if the hull is degenerate (not {@code isDefined()}) */
+    int setBlocks(Object actor, ConvexHull hull, String pattern);
+    /** Replaces blocks matching a mask with a pattern inside a convex hull. @return the number of blocks changed */
+    int replaceBlocks(Object actor, ConvexHull hull, String mask, String pattern);
+    /** Copies the convex hull into the actor's clipboard, origin at its own bounding-box minimum corner. */
+    void copy(Object actor, ConvexHull hull);
+
+    /**
+     * The actor's current selection reported as a convex hull, only when the selector is exactly a
+     * ConvexPolyhedralRegion.
+     * @throws dev.herobrine.api.core.ApiException BAD_REQUEST if there's no selection, or the selector isn't a convex hull
+     */
+    ConvexHull convexHullSelection(Object actor);
 
     // ---- transforms (compose onto the actor's clipboard transform; affect the next paste(), not past
     // pastes - this is WorldEdit's own //rotate and //flip semantics: non-destructive, stackable, applied

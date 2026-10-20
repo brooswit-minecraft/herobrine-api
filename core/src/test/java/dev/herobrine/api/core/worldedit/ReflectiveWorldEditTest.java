@@ -205,6 +205,134 @@ class ReflectiveWorldEditTest {
         assertEquals(3, replaced);
     }
 
+    @Test void cylinderCanBeCopied() {
+        a.copy(actor, new WorldEditAdapter.Cylinder(10, 20, 5, 7, 60, 70));
+        assertNotNull(session().clipboard);
+        assertTrue(FakeWorldEdit.INSTANCE.calls.stream().anyMatch(c -> c.startsWith("ForwardExtentCopy:")));
+    }
+
+    @Test void polygonSelectionReportsPointsAndYExtent() {
+        ApiException e = assertThrows(ApiException.class, () -> a.polygonSelection(actor));
+        assertEquals("BAD_REQUEST", e.code);
+
+        World world = new World() {};
+        session().selectionWorld = world;
+        session().selectionRegion = new com.sk89q.worldedit.regions.CuboidRegion(BlockVector3.at(1, 2, 3), BlockVector3.at(4, 5, 6));
+        ApiException notPolygon = assertThrows(ApiException.class, () -> a.polygonSelection(actor));
+        assertEquals("BAD_REQUEST", notPolygon.code);
+
+        var poly = new com.sk89q.worldedit.regions.Polygonal2DRegion();
+        poly.addPoint(com.sk89q.worldedit.math.BlockVector2.at(0, 0));
+        poly.addPoint(com.sk89q.worldedit.math.BlockVector2.at(4, 0));
+        poly.addPoint(com.sk89q.worldedit.math.BlockVector2.at(4, 4));
+        poly.setMinimumY(10);
+        poly.setMaximumY(20);
+        session().selectionRegion = poly;
+        var result = a.polygonSelection(actor);
+        assertEquals(new WorldEditAdapter.Polygon(java.util.List.of(
+                new WorldEditAdapter.Point2D(0, 0),
+                new WorldEditAdapter.Point2D(4, 0),
+                new WorldEditAdapter.Point2D(4, 4)), 10, 20), result);
+    }
+
+    @Test void polygonEditsRequireAtLeastThreePoints() {
+        var tooFew = new WorldEditAdapter.Polygon(java.util.List.of(
+                new WorldEditAdapter.Point2D(0, 0), new WorldEditAdapter.Point2D(1, 1)), 0, 1);
+        ApiException e = assertThrows(ApiException.class, () -> a.setBlocks(actor, tooFew, "stone"));
+        assertEquals("BAD_REQUEST", e.code);
+    }
+
+    @Test void polygonEditsBuildAPolygonalRegion() {
+        var triangle = new WorldEditAdapter.Polygon(java.util.List.of(
+                new WorldEditAdapter.Point2D(0, 0),
+                new WorldEditAdapter.Point2D(4, 0),
+                new WorldEditAdapter.Point2D(4, 4)), 10, 20);
+        int changed = a.setBlocks(actor, triangle, "stone");
+        assertEquals(7, changed);
+        assertTrue(FakeWorldEdit.INSTANCE.calls.stream().anyMatch(c -> c.startsWith("setBlocks:Polygonal2DRegion(")));
+
+        int replaced = a.replaceBlocks(actor, triangle, "dirt", "stone");
+        assertEquals(3, replaced);
+
+        a.copy(actor, triangle);
+        assertNotNull(session().clipboard);
+    }
+
+    @Test void ellipsoidSelectionReportsCenterAndRadii() {
+        ApiException e = assertThrows(ApiException.class, () -> a.ellipsoidSelection(actor));
+        assertEquals("BAD_REQUEST", e.code);
+
+        World world = new World() {};
+        session().selectionWorld = world;
+        session().selectionRegion = new com.sk89q.worldedit.regions.CuboidRegion(BlockVector3.at(1, 2, 3), BlockVector3.at(4, 5, 6));
+        ApiException notEllipsoid = assertThrows(ApiException.class, () -> a.ellipsoidSelection(actor));
+        assertEquals("BAD_REQUEST", notEllipsoid.code);
+
+        session().selectionRegion = new com.sk89q.worldedit.regions.EllipsoidRegion(
+                BlockVector3.at(10, 20, 30), com.sk89q.worldedit.math.Vector3.at(3, 4, 5));
+        var result = a.ellipsoidSelection(actor);
+        assertEquals(new WorldEditAdapter.Ellipsoid(10, 20, 30, 3, 4, 5), result);
+    }
+
+    @Test void ellipsoidEditsBuildAnEllipsoidRegion() {
+        var ellipsoid = new WorldEditAdapter.Ellipsoid(10, 20, 30, 3, 4, 5);
+        int changed = a.setBlocks(actor, ellipsoid, "stone");
+        assertEquals(7, changed);
+        assertTrue(FakeWorldEdit.INSTANCE.calls.stream().anyMatch(c ->
+                c.startsWith("setBlocks:EllipsoidRegion(center=BV3(10,20,30),radius=V3(3.0,4.0,5.0)):stone")));
+
+        int replaced = a.replaceBlocks(actor, ellipsoid, "dirt", "stone");
+        assertEquals(3, replaced);
+
+        a.copy(actor, ellipsoid);
+        assertNotNull(session().clipboard);
+    }
+
+    @Test void convexHullSelectionReportsVertices() {
+        ApiException e = assertThrows(ApiException.class, () -> a.convexHullSelection(actor));
+        assertEquals("BAD_REQUEST", e.code);
+
+        World world = new World() {};
+        session().selectionWorld = world;
+        session().selectionRegion = new com.sk89q.worldedit.regions.CuboidRegion(BlockVector3.at(1, 2, 3), BlockVector3.at(4, 5, 6));
+        ApiException notHull = assertThrows(ApiException.class, () -> a.convexHullSelection(actor));
+        assertEquals("BAD_REQUEST", notHull.code);
+
+        var hull = new com.sk89q.worldedit.regions.ConvexPolyhedralRegion(null);
+        hull.addVertex(BlockVector3.at(0, 0, 0));
+        hull.addVertex(BlockVector3.at(4, 0, 0));
+        hull.addVertex(BlockVector3.at(0, 4, 0));
+        hull.addVertex(BlockVector3.at(0, 0, 4));
+        session().selectionRegion = hull;
+        var result = a.convexHullSelection(actor);
+        assertEquals(4, result.vertices().size());
+        assertTrue(result.vertices().contains(new WorldEditAdapter.Vertex(4, 0, 0)));
+    }
+
+    @Test void convexHullEditsRejectADegenerateHull() {
+        var tooFew = new WorldEditAdapter.ConvexHull(java.util.List.of(
+                new WorldEditAdapter.Vertex(0, 0, 0), new WorldEditAdapter.Vertex(1, 0, 0)));
+        ApiException e = assertThrows(ApiException.class, () -> a.setBlocks(actor, tooFew, "stone"));
+        assertEquals("BAD_REQUEST", e.code);
+    }
+
+    @Test void convexHullEditsBuildAConvexPolyhedralRegion() {
+        var hull = new WorldEditAdapter.ConvexHull(java.util.List.of(
+                new WorldEditAdapter.Vertex(0, 0, 0),
+                new WorldEditAdapter.Vertex(4, 0, 0),
+                new WorldEditAdapter.Vertex(0, 4, 0),
+                new WorldEditAdapter.Vertex(0, 0, 4)));
+        int changed = a.setBlocks(actor, hull, "stone");
+        assertEquals(7, changed);
+        assertTrue(FakeWorldEdit.INSTANCE.calls.stream().anyMatch(c -> c.startsWith("setBlocks:ConvexPolyhedralRegion(")));
+
+        int replaced = a.replaceBlocks(actor, hull, "dirt", "stone");
+        assertEquals(3, replaced);
+
+        a.copy(actor, hull);
+        assertNotNull(session().clipboard);
+    }
+
     @Test void generationShapesUseVerifiedEditSessionMethods() {
         int sphere = a.makeSphere(actor, 1, 2, 3, 4, 5, 6, true, "stone");
         assertEquals(11, sphere);

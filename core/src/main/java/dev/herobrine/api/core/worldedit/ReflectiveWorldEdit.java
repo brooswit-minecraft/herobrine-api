@@ -8,7 +8,10 @@ import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -27,7 +30,13 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
     private static final String BLOCK_VECTOR3 = "com.sk89q.worldedit.math.BlockVector3";
     private static final String CUBOID_REGION = "com.sk89q.worldedit.regions.CuboidRegion";
     private static final String CYLINDER_REGION = "com.sk89q.worldedit.regions.CylinderRegion";
+    private static final String POLYGONAL_2D_REGION = "com.sk89q.worldedit.regions.Polygonal2DRegion";
+    private static final String ELLIPSOID_REGION = "com.sk89q.worldedit.regions.EllipsoidRegion";
+    private static final String CONVEX_POLYHEDRAL_REGION = "com.sk89q.worldedit.regions.ConvexPolyhedralRegion";
+    private static final String BLOCK_VECTOR2 = "com.sk89q.worldedit.math.BlockVector2";
     private static final String VECTOR2 = "com.sk89q.worldedit.math.Vector2";
+    private static final String VECTOR3 = "com.sk89q.worldedit.math.Vector3";
+    private static final String WORLD_CLASS = "com.sk89q.worldedit.world.World";
     private static final String PARSER_CONTEXT = "com.sk89q.worldedit.extension.input.ParserContext";
     private static final String CLIPBOARD_HOLDER = "com.sk89q.worldedit.session.ClipboardHolder";
     private static final String BLOCK_ARRAY_CLIPBOARD = "com.sk89q.worldedit.extent.clipboard.BlockArrayClipboard";
@@ -122,8 +131,17 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
     }
 
     @Override public int setBlocks(Object actor, Box box, String pattern) {
+        return setBlocksOnRegion(actor, region(box), pattern);
+    }
+
+    @Override public int replaceBlocks(Object actor, Box box, String mask, String pattern) {
+        return replaceBlocksOnRegion(actor, region(box), mask, pattern);
+    }
+
+    /** Shared by every region shape's {@code setBlocks} overload (verified: {@code EditSession.setBlocks}
+     *  takes the {@code Region} interface, so any real region implementation works identically here). */
+    private int setBlocksOnRegion(Object actor, Object region, String pattern) {
         Object we = worldEdit();
-        Object region = region(box);
         Object patternObj = parsePattern(we, actor, pattern);
         Object session = session(we, actor);
         Object editSession = newEditSession(session, actor);
@@ -135,9 +153,9 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
         }
     }
 
-    @Override public int replaceBlocks(Object actor, Box box, String mask, String pattern) {
+    /** Shared by every region shape's {@code replaceBlocks} overload. */
+    private int replaceBlocksOnRegion(Object actor, Object region, String mask, String pattern) {
         Object we = worldEdit();
-        Object region = region(box);
         Object maskObj = parseMask(we, actor, mask);
         Object patternObj = parsePattern(we, actor, pattern);
         Object session = session(we, actor);
@@ -166,8 +184,17 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
 
     /** Origin is the box's minimum corner: a fixed, typed input, not WorldEdit's placement-position heuristic. */
     @Override public void copy(Object actor, Box box) {
+        copyRegion(actor, region(box));
+    }
+
+    @Override public void copy(Object actor, Cylinder cylinder) {
+        copyRegion(actor, cylinderRegion(cylinder));
+    }
+
+    /** Shared by every region shape's {@code copy}. Origin is always the region's own bounding-box minimum
+     *  corner - a fixed, typed input, not WorldEdit's placement-position heuristic (see {@code copy(Box)}). */
+    private void copyRegion(Object actor, Object region) {
         Object we = worldEdit();
-        Object region = region(box);
         Object session = session(we, actor);
         Object clipboard = create(BLOCK_ARRAY_CLIPBOARD, region);
         Object minPoint = invoke(region, "getMinimumPoint");
@@ -300,32 +327,11 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
     // ---- cylinder edits (same mechanics as the Box overloads, different region construction) ----
 
     @Override public int setBlocks(Object actor, Cylinder cylinder, String pattern) {
-        Object we = worldEdit();
-        Object region = cylinderRegion(cylinder);
-        Object patternObj = parsePattern(we, actor, pattern);
-        Object session = session(we, actor);
-        Object editSession = newEditSession(session, actor);
-        try {
-            return (Integer) invokeTranslating(editSession, "setBlocks", MAX_CHANGED_BLOCKS_EXCEPTION,
-                    "Edit exceeds the configured block change limit", region, patternObj);
-        } finally {
-            rememberAndClose(session, editSession);
-        }
+        return setBlocksOnRegion(actor, cylinderRegion(cylinder), pattern);
     }
 
     @Override public int replaceBlocks(Object actor, Cylinder cylinder, String mask, String pattern) {
-        Object we = worldEdit();
-        Object region = cylinderRegion(cylinder);
-        Object maskObj = parseMask(we, actor, mask);
-        Object patternObj = parsePattern(we, actor, pattern);
-        Object session = session(we, actor);
-        Object editSession = newEditSession(session, actor);
-        try {
-            return (Integer) invokeTranslating(editSession, "replaceBlocks", MAX_CHANGED_BLOCKS_EXCEPTION,
-                    "Edit exceeds the configured block change limit", region, maskObj, patternObj);
-        } finally {
-            rememberAndClose(session, editSession);
-        }
+        return replaceBlocksOnRegion(actor, cylinderRegion(cylinder), mask, pattern);
     }
 
     /** Builds a {@code CylinderRegion} (verified 4-arg ctor: center, radius, minY, maxY - center's Y is
@@ -334,6 +340,155 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
         Object center = blockVector3(cylinder.centerX(), 0, cylinder.centerZ());
         Object radius = invokeStatic(load(VECTOR2), "at", cylinder.radiusX(), cylinder.radiusZ());
         return create(CYLINDER_REGION, center, radius, cylinder.minY(), cylinder.maxY());
+    }
+
+    // ---- polygon edits/selection ----
+
+    @Override public int setBlocks(Object actor, Polygon polygon, String pattern) {
+        return setBlocksOnRegion(actor, polygonRegion(polygon), pattern);
+    }
+
+    @Override public int replaceBlocks(Object actor, Polygon polygon, String mask, String pattern) {
+        return replaceBlocksOnRegion(actor, polygonRegion(polygon), mask, pattern);
+    }
+
+    @Override public void copy(Object actor, Polygon polygon) {
+        copyRegion(actor, polygonRegion(polygon));
+    }
+
+    @Override public Polygon polygonSelection(Object actor) {
+        Object we = worldEdit();
+        Object region = selectedRegion(we, actor);
+        if (!load(POLYGONAL_2D_REGION).isInstance(region)) {
+            throw ApiException.badRequest("Current selection is not a polygon");
+        }
+        List<Object> points = (List<Object>) invoke(region, "getPoints");
+        List<Point2D> result = new ArrayList<>(points.size());
+        for (Object p : points) {
+            result.add(new Point2D((Integer) invoke(p, "getX"), (Integer) invoke(p, "getZ")));
+        }
+        int minY = (Integer) invoke(region, "getMinimumY");
+        int maxY = (Integer) invoke(region, "getMaximumY");
+        return new Polygon(result, minY, maxY);
+    }
+
+    /**
+     * Builds a {@code Polygonal2DRegion} entirely without a {@code World} - verified: the no-arg
+     * constructor (world = null), then {@code addPoint(BlockVector2)} per point and
+     * {@code setMinimumY}/{@code setMaximumY}, both of which only call {@code getWorldMinY()}/
+     * {@code getWorldMaxY()} internally (via {@code recalculate()}), and those gracefully return
+     * {@code Integer.MIN_VALUE}/{@code MAX_VALUE} when {@code world == null}
+     * ({@code AbstractRegion.java}). At least 3 points are required - verified: fewer and the real
+     * {@code Polygonal2DRegion.contains(BlockVector3)} always returns false (a silent, always-empty
+     * region), which this adapter rejects explicitly instead.
+     */
+    private Object polygonRegion(Polygon polygon) {
+        if (polygon.points().size() < 3) throw ApiException.badRequest("A polygon needs at least 3 points");
+        Object region = create(POLYGONAL_2D_REGION);
+        for (Point2D p : polygon.points()) {
+            Object point = invokeStatic(load(BLOCK_VECTOR2), "at", p.x(), p.z());
+            invoke(region, "addPoint", point);
+        }
+        invoke(region, "setMinimumY", polygon.minY());
+        invoke(region, "setMaximumY", polygon.maxY());
+        return region;
+    }
+
+    // ---- ellipsoid edits/selection ----
+
+    @Override public int setBlocks(Object actor, Ellipsoid ellipsoid, String pattern) {
+        return setBlocksOnRegion(actor, ellipsoidRegion(ellipsoid), pattern);
+    }
+
+    @Override public int replaceBlocks(Object actor, Ellipsoid ellipsoid, String mask, String pattern) {
+        return replaceBlocksOnRegion(actor, ellipsoidRegion(ellipsoid), mask, pattern);
+    }
+
+    @Override public void copy(Object actor, Ellipsoid ellipsoid) {
+        copyRegion(actor, ellipsoidRegion(ellipsoid));
+    }
+
+    @Override public Ellipsoid ellipsoidSelection(Object actor) {
+        Object we = worldEdit();
+        Object region = selectedRegion(we, actor);
+        if (!load(ELLIPSOID_REGION).isInstance(region)) {
+            throw ApiException.badRequest("Current selection is not an ellipsoid");
+        }
+        Object center = invoke(region, "getCenter");
+        Object radius = invoke(region, "getRadius");
+        int centerX = (int) Math.round((Double) invoke(center, "getX"));
+        int centerY = (int) Math.round((Double) invoke(center, "getY"));
+        int centerZ = (int) Math.round((Double) invoke(center, "getZ"));
+        double radiusX = (Double) invoke(radius, "getX");
+        double radiusY = (Double) invoke(radius, "getY");
+        double radiusZ = (Double) invoke(radius, "getZ");
+        return new Ellipsoid(centerX, centerY, centerZ, radiusX, radiusY, radiusZ);
+    }
+
+    /** Builds an {@code EllipsoidRegion} via its verified world-independent 2-arg constructor
+     *  {@code EllipsoidRegion(BlockVector3 center, Vector3 radius)} - the ctor body assigns its first
+     *  argument to the center field and passes the second to {@code setRadius}, confirmed by reading the
+     *  body (not assumed from the javadoc's generic "pos1"/"pos2" parameter names). */
+    private Object ellipsoidRegion(Ellipsoid ellipsoid) {
+        Object center = blockVector3(ellipsoid.centerX(), ellipsoid.centerY(), ellipsoid.centerZ());
+        Object radius = invokeStatic(load(VECTOR3), "at", ellipsoid.radiusX(), ellipsoid.radiusY(), ellipsoid.radiusZ());
+        return create(ELLIPSOID_REGION, center, radius);
+    }
+
+    // ---- convex hull edits/selection ----
+
+    @Override public int setBlocks(Object actor, ConvexHull hull, String pattern) {
+        return setBlocksOnRegion(actor, convexHullRegion(hull), pattern);
+    }
+
+    @Override public int replaceBlocks(Object actor, ConvexHull hull, String mask, String pattern) {
+        return replaceBlocksOnRegion(actor, convexHullRegion(hull), mask, pattern);
+    }
+
+    @Override public void copy(Object actor, ConvexHull hull) {
+        copyRegion(actor, convexHullRegion(hull));
+    }
+
+    @Override public ConvexHull convexHullSelection(Object actor) {
+        Object we = worldEdit();
+        Object region = selectedRegion(we, actor);
+        if (!load(CONVEX_POLYHEDRAL_REGION).isInstance(region)) {
+            throw ApiException.badRequest("Current selection is not a convex hull");
+        }
+        Collection<Object> vertices = (Collection<Object>) invoke(region, "getVertices");
+        List<Vertex> result = new ArrayList<>(vertices.size());
+        for (Object v : vertices) {
+            result.add(new Vertex((Integer) invoke(v, "getX"), (Integer) invoke(v, "getY"), (Integer) invoke(v, "getZ")));
+        }
+        return new ConvexHull(result);
+    }
+
+    /**
+     * Builds a {@code ConvexPolyhedralRegion} with a null {@code World} (its constructor parameter is
+     * verified {@code @Nullable}) via repeated {@code addVertex(BlockVector3)}, then checks
+     * {@code isDefined()} - verified: triangles (and so a non-degenerate hull) only form once a 4th,
+     * non-coplanar vertex is added ({@code ConvexPolyhedralRegion.addVertex}); too few or all-coplanar
+     * vertices leave {@code isDefined() == false} and {@code getMinimumPoint()}/{@code getMaximumPoint()}
+     * null, which would NPE deep inside {@code EditSession} rather than fail cleanly, so this checks first.
+     * The single constructor's only parameter type is {@code World}, but {@code ConvexPolyhedralRegion}
+     * also has a copy-constructor taking another {@code ConvexPolyhedralRegion} - both take one non-primitive
+     * argument, so passing a literal {@code null} through the generic {@link #create} helper would be
+     * ambiguous between them; this looks up the {@code World}-parameter constructor explicitly instead.
+     */
+    private Object convexHullRegion(ConvexHull hull) {
+        Object region;
+        try {
+            region = load(CONVEX_POLYHEDRAL_REGION).getConstructor(load(WORLD_CLASS)).newInstance((Object) null);
+        } catch (ReflectiveOperationException e) {
+            throw new ApiException(500, "ACTION_FAILED", "Cannot construct ConvexPolyhedralRegion: " + e);
+        }
+        for (Vertex v : hull.vertices()) {
+            invoke(region, "addVertex", blockVector3(v.x(), v.y(), v.z()));
+        }
+        if (!Boolean.TRUE.equals(invoke(region, "isDefined"))) {
+            throw ApiException.badRequest("Convex hull is degenerate (needs at least 4 non-coplanar vertices)");
+        }
+        return region;
     }
 
     // ---- generation shapes ----

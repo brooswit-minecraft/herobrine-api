@@ -24,7 +24,7 @@ The only state the API keeps is the two token hashes, SSE subscriber queues, and
 | Provider SPI | `ResourceProvider`, `ApiRegistrar` | namespaced `modid.*` | `modid.*` | — | client | Tested | — |
 | Event stream | `EventBus` | `/events`, `/events/stream` (SSE, `?types=`) | — | declared types | client | Tested | No WebSocket; few producers (see Baritone) |
 | Baritone adapter | `BaritoneAdapter`, `ReflectiveBaritone` | — | typed process / builder / settings / waypoint calls | path events | client | Tested against fakes of the API | Names/signatures from memory, unverified against a real build; no command-manager fallback |
-| WorldEdit adapter | `WorldEditAdapter`, `ReflectiveWorldEdit` | — | typed edit / history / clipboard / schematic / selection / transform / generation calls (cuboid and cylinder regions) | — | client | Tested against fakes of the API | Verified against real WorldEdit 7.3.8 sources (not from memory) - see docs/worldedit-coverage.md for the full version-qualified matrix and gaps; contract only, no neoforge wiring or actor/world construction yet (MINECRAFT-476) |
+| WorldEdit adapter | `WorldEditAdapter`, `ReflectiveWorldEdit` | — | typed edit / history / clipboard / schematic / selection / transform / generation calls (cuboid, cylinder, polygon, ellipsoid and convex-hull regions) | — | client | Tested against fakes of the API | Verified against real WorldEdit 7.3.8 sources (not from memory) - see docs/worldedit-coverage.md for the full version-qualified matrix and gaps; contract only, no neoforge wiring or actor/world construction yet (MINECRAFT-476) |
 
 ## Minecraft client (neoforge module — all Draft)
 
