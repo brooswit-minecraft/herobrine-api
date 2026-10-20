@@ -202,9 +202,24 @@ class ReflectiveWorldEditTest {
         assertEquals(17, pyramid);
         assertTrue(FakeWorldEdit.INSTANCE.calls.contains("makePyramid:BV3(1,2,3):stone:5:true"));
 
+        // 3x3x3 box, thickness 1: only the exact center is more than `thickness` away from every face,
+        // so exactly 1 block (the interior) changes - see hollowOutBoxPreservesTheShellAndChangesTheInterior
+        // for the test that actually distinguishes shell-preserved from interior-preserved.
         int hollow = a.hollowOutBox(actor, new Box(0, 0, 0, 2, 2, 2), 1, "stone");
-        assertEquals(5, hollow);
+        assertEquals(1, hollow);
         assertEquals(4, session().history.size()); // each generation call is its own remembered edit
+    }
+
+    @Test void hollowOutBoxPreservesTheShellAndChangesTheInterior() {
+        // Verified against the real EditSession.hollowOutRegion body (EditSession.java:2496-2558): `thickness`
+        // boundary layers are left untouched (the shell), and setBlock only runs for the interior beyond it -
+        // the opposite of "replace the shell, leave the interior", which a prior draft of this adapter's own
+        // javadoc incorrectly claimed.
+        int changed = a.hollowOutBox(actor, new Box(0, 0, 0, 4, 4, 4), 1, "stone"); // 5x5x5 box, thickness 1
+        assertEquals(27, changed); // the 3x3x3 interior
+        assertFalse(FakeWorldEdit.INSTANCE.lastHollowInterior.contains("0,0,0")); // a shell corner: untouched
+        assertFalse(FakeWorldEdit.INSTANCE.lastHollowInterior.contains("2,2,0")); // a shell face center: untouched
+        assertTrue(FakeWorldEdit.INSTANCE.lastHollowInterior.contains("2,2,2")); // the exact center: touched
     }
 
     @Test void pasteDefaultsMatchWorldEditsOwnBuilderDefaults() {

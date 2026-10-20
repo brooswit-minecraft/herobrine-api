@@ -128,8 +128,10 @@ public interface WorldEditAdapter {
     int makePyramid(Object actor, int x, int y, int z, int size, boolean filled, String pattern);
 
     /**
-     * Replaces the blocks within {@code thickness} of the box's boundary with a pattern, leaving the
-     * interior untouched.
+     * Leaves a shell of {@code thickness} blocks at the box's boundary untouched, and replaces every block
+     * in the interior beyond it with a pattern (verified: {@code EditSession.hollowOutRegion} only
+     * {@code setBlock}s positions with no neighbor in its computed boundary/"outside" set - the boundary
+     * shell itself is what survives, not the interior).
      * @return the number of blocks changed
      */
     int hollowOutBox(Object actor, Box box, int thickness, String pattern);

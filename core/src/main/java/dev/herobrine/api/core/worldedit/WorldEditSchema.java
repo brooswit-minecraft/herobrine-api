@@ -125,7 +125,7 @@ public final class WorldEditSchema {
                             ParamDef.required("filled", "boolean", "false generates only a shell"),
                             ParamDef.required("pattern", "string", "WorldEdit pattern syntax"))),
             new Operation("worldedit.hollow_out_box",
-                    "Replace blocks within `thickness` of the box's boundary with a pattern, leaving the interior untouched (WorldEditAdapter#hollowOutBox)",
+                    "Leave a shell of `thickness` blocks at the box's boundary untouched, and replace every block in the interior with a pattern (WorldEditAdapter#hollowOutBox)",
                     concat(BOX_PARAMS,
                             ParamDef.required("thickness", "integer", "Shell thickness (manhattan distance)"),
                             ParamDef.required("pattern", "string", "WorldEdit pattern syntax"))));
