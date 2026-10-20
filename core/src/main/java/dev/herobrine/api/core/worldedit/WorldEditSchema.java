@@ -25,6 +25,20 @@ public final class WorldEditSchema {
             ParamDef.required("y2", "integer", "Box corner coordinate y2"),
             ParamDef.required("z2", "integer", "Box corner coordinate z2"));
 
+    private static final List<ParamDef> CYLINDER_PARAMS = List.of(
+            ParamDef.required("centerX", "integer", "Cylinder center X"),
+            ParamDef.required("centerZ", "integer", "Cylinder center Z"),
+            ParamDef.required("radiusX", "number", "Radius along the X axis"),
+            ParamDef.required("radiusZ", "number", "Radius along the Z axis (equal to radiusX for a circular cylinder)"),
+            ParamDef.required("minY", "integer", "Minimum Y, inclusive"),
+            ParamDef.required("maxY", "integer", "Maximum Y, inclusive"));
+
+    private static final List<ParamDef> PASTE_OPTION_PARAMS = List.of(
+            ParamDef.optional("ignoreAirBlocks", "boolean", "Skip air blocks from the source", false),
+            ParamDef.optional("ignoreStructureVoidBlocks", "boolean", "Skip structure-void blocks from the source", false),
+            ParamDef.optional("copyEntities", "boolean", "Copy entities from the source", true),
+            ParamDef.optional("copyBiomes", "boolean", "Copy biomes from the source", false));
+
     public static final List<Operation> OPERATIONS = List.of(
             new Operation("worldedit.set_blocks",
                     "Fill a box with a pattern (WorldEditAdapter#setBlocks)",
@@ -41,11 +55,12 @@ public final class WorldEditSchema {
                     "Copy a box into the actor's clipboard, origin at its minimum corner (WorldEditAdapter#copy)",
                     BOX_PARAMS),
             new Operation("worldedit.paste",
-                    "Paste the actor's clipboard with its origin at x,y,z (WorldEditAdapter#paste)",
-                    List.of(
+                    "Paste the actor's clipboard with its origin at x,y,z, with optional WorldEdit paste flags "
+                            + "(defaults match WorldEdit's own PasteBuilder) (WorldEditAdapter#paste)",
+                    concat(List.of(
                             ParamDef.required("x", "integer", "Paste origin X"),
                             ParamDef.required("y", "integer", "Paste origin Y"),
-                            ParamDef.required("z", "integer", "Paste origin Z"))),
+                            ParamDef.required("z", "integer", "Paste origin Z")), PASTE_OPTION_PARAMS.toArray(ParamDef[]::new))),
             new Operation("worldedit.save_schematic",
                     "Write the actor's clipboard to a schematic file; format inferred from the file extension (WorldEditAdapter#saveSchematic)",
                     List.of(ParamDef.required("file", "string", "Schematic file name"))),
@@ -66,7 +81,54 @@ public final class WorldEditSchema {
                     List.of(
                             ParamDef.required("sx", "number", "X-axis scale factor"),
                             ParamDef.required("sy", "number", "Y-axis scale factor"),
-                            ParamDef.required("sz", "number", "Z-axis scale factor"))));
+                            ParamDef.required("sz", "number", "Z-axis scale factor"))),
+            new Operation("worldedit.set_blocks_cylinder",
+                    "Fill a cylindrical region with a pattern (WorldEditAdapter#setBlocks(Object, Cylinder, String))",
+                    concat(CYLINDER_PARAMS, ParamDef.required("pattern", "string", "WorldEdit pattern syntax"))),
+            new Operation("worldedit.replace_blocks_cylinder",
+                    "Replace blocks matching a mask with a pattern inside a cylindrical region (WorldEditAdapter#replaceBlocks(Object, Cylinder, String, String))",
+                    concat(CYLINDER_PARAMS,
+                            ParamDef.required("mask", "string", "WorldEdit mask syntax"),
+                            ParamDef.required("pattern", "string", "WorldEdit pattern syntax"))),
+            new Operation("worldedit.cylinder_selection",
+                    "The actor's current selection as a cylinder, only when the selector is exactly a CylinderRegion (WorldEditAdapter#cylinderSelection)",
+                    List.of()),
+            new Operation("worldedit.make_sphere",
+                    "Generate a sphere (or ellipsoid, when the radii differ) of a pattern centered at x,y,z (WorldEditAdapter#makeSphere)",
+                    List.of(
+                            ParamDef.required("x", "integer", "Center X"),
+                            ParamDef.required("y", "integer", "Center Y"),
+                            ParamDef.required("z", "integer", "Center Z"),
+                            ParamDef.required("radiusX", "number", "Radius along the X axis"),
+                            ParamDef.required("radiusY", "number", "Radius along the Y axis"),
+                            ParamDef.required("radiusZ", "number", "Radius along the Z axis"),
+                            ParamDef.required("filled", "boolean", "false generates only a shell"),
+                            ParamDef.required("pattern", "string", "WorldEdit pattern syntax"))),
+            new Operation("worldedit.make_cylinder",
+                    "Generate a cylinder (or elliptical cylinder, when radiusX != radiusZ) of a pattern with its base centered at x,y,z (WorldEditAdapter#makeCylinder)",
+                    List.of(
+                            ParamDef.required("x", "integer", "Base center X"),
+                            ParamDef.required("y", "integer", "Base center Y"),
+                            ParamDef.required("z", "integer", "Base center Z"),
+                            ParamDef.required("radiusX", "number", "Radius along the X axis"),
+                            ParamDef.required("radiusZ", "number", "Radius along the Z axis"),
+                            ParamDef.required("height", "integer", "Up/down extent; negative extends downward"),
+                            ParamDef.required("filled", "boolean", "false generates only a shell"),
+                            ParamDef.required("pattern", "string", "WorldEdit pattern syntax"))),
+            new Operation("worldedit.make_pyramid",
+                    "Generate a square pyramid of a pattern with its base centered at x,y,z (WorldEditAdapter#makePyramid)",
+                    List.of(
+                            ParamDef.required("x", "integer", "Base center X"),
+                            ParamDef.required("y", "integer", "Base center Y"),
+                            ParamDef.required("z", "integer", "Base center Z"),
+                            ParamDef.required("size", "integer", "Pyramid size"),
+                            ParamDef.required("filled", "boolean", "false generates only a shell"),
+                            ParamDef.required("pattern", "string", "WorldEdit pattern syntax"))),
+            new Operation("worldedit.hollow_out_box",
+                    "Replace blocks within `thickness` of the box's boundary with a pattern, leaving the interior untouched (WorldEditAdapter#hollowOutBox)",
+                    concat(BOX_PARAMS,
+                            ParamDef.required("thickness", "integer", "Shell thickness (manhattan distance)"),
+                            ParamDef.required("pattern", "string", "WorldEdit pattern syntax"))));
 
     private static List<ParamDef> concat(List<ParamDef> base, ParamDef... extra) {
         var out = new java.util.ArrayList<>(base);

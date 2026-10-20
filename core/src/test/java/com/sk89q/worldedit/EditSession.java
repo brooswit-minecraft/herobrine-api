@@ -32,6 +32,22 @@ public final class EditSession implements Extent, AutoCloseable {
         return FakeWorldEdit.INSTANCE.replaceBlocks(this, region, mask, pattern);
     }
 
+    public int makeSphere(com.sk89q.worldedit.math.BlockVector3 pos, Pattern block, double radiusX, double radiusY, double radiusZ, boolean filled) throws MaxChangedBlocksException {
+        return FakeWorldEdit.INSTANCE.makeSphere(this, pos, block, radiusX, radiusY, radiusZ, filled);
+    }
+
+    public int makeCylinder(com.sk89q.worldedit.math.BlockVector3 pos, Pattern block, double radiusX, double radiusZ, int height, boolean filled) throws MaxChangedBlocksException {
+        return FakeWorldEdit.INSTANCE.makeCylinder(this, pos, block, radiusX, radiusZ, height, filled);
+    }
+
+    public int makePyramid(com.sk89q.worldedit.math.BlockVector3 position, Pattern block, int size, boolean filled) throws MaxChangedBlocksException {
+        return FakeWorldEdit.INSTANCE.makePyramid(this, position, block, size, filled);
+    }
+
+    public int hollowOutRegion(Region region, int thickness, Pattern pattern) throws MaxChangedBlocksException {
+        return FakeWorldEdit.INSTANCE.hollowOutRegion(this, region, thickness, pattern);
+    }
+
     /** Applies (and records) writes one at a time, like the real {@code BlockChangeLimiter}. */
     public int applyWithLimit(int attempted) throws MaxChangedBlocksException {
         if (maxBlocks < 0 || attempted <= maxBlocks) {

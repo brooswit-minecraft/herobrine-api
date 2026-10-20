@@ -26,6 +26,8 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
     private static final String WORLDEDIT = "com.sk89q.worldedit.WorldEdit";
     private static final String BLOCK_VECTOR3 = "com.sk89q.worldedit.math.BlockVector3";
     private static final String CUBOID_REGION = "com.sk89q.worldedit.regions.CuboidRegion";
+    private static final String CYLINDER_REGION = "com.sk89q.worldedit.regions.CylinderRegion";
+    private static final String VECTOR2 = "com.sk89q.worldedit.math.Vector2";
     private static final String PARSER_CONTEXT = "com.sk89q.worldedit.extension.input.ParserContext";
     private static final String CLIPBOARD_HOLDER = "com.sk89q.worldedit.session.ClipboardHolder";
     private static final String BLOCK_ARRAY_CLIPBOARD = "com.sk89q.worldedit.extent.clipboard.BlockArrayClipboard";
@@ -171,7 +173,13 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
         }
     }
 
+    /** WorldEdit's own {@code PasteBuilder} field defaults (verified: {@code session/PasteBuilder.java:47-51}). */
     @Override public void paste(Object actor, int x, int y, int z) {
+        paste(actor, x, y, z, false, false, true, false);
+    }
+
+    @Override public void paste(Object actor, int x, int y, int z,
+            boolean ignoreAirBlocks, boolean ignoreStructureVoidBlocks, boolean copyEntities, boolean copyBiomes) {
         Object we = worldEdit();
         Object session = session(we, actor);
         Object holder = invokeTranslating(session, "getClipboard", EMPTY_CLIPBOARD_EXCEPTION, "No clipboard is set");
@@ -180,6 +188,10 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
             Object to = blockVector3(x, y, z);
             Object pasteBuilder = invoke(holder, "createPaste", editSession);
             pasteBuilder = invoke(pasteBuilder, "to", to);
+            pasteBuilder = invoke(pasteBuilder, "ignoreAirBlocks", ignoreAirBlocks);
+            pasteBuilder = invoke(pasteBuilder, "ignoreStructureVoidBlocks", ignoreStructureVoidBlocks);
+            pasteBuilder = invoke(pasteBuilder, "copyEntities", copyEntities);
+            pasteBuilder = invoke(pasteBuilder, "copyBiomes", copyBiomes);
             Object operation = invoke(pasteBuilder, "build");
             invokeStatic(load(OPERATIONS), "completeLegacy", operation);
         } finally {
@@ -241,15 +253,133 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
 
     @Override public Box selection(Object actor) {
         Object we = worldEdit();
-        Object session = session(we, actor);
-        Object world = invoke(session, "getSelectionWorld");
-        if (world == null) throw ApiException.badRequest("No selection world is set");
-        Object region = invokeTranslating(session, "getSelection", INCOMPLETE_REGION_EXCEPTION,
-                "No selection is defined (or it is in a different world)", world);
+        Object region = selectedRegion(we, actor);
         Object min = invoke(region, "getMinimumPoint");
         Object max = invoke(region, "getMaximumPoint");
         return new Box((Integer) invoke(min, "getX"), (Integer) invoke(min, "getY"), (Integer) invoke(min, "getZ"),
                 (Integer) invoke(max, "getX"), (Integer) invoke(max, "getY"), (Integer) invoke(max, "getZ"));
+    }
+
+    @Override public Cylinder cylinderSelection(Object actor) {
+        Object we = worldEdit();
+        Object region = selectedRegion(we, actor);
+        if (!load(CYLINDER_REGION).isInstance(region)) {
+            throw ApiException.badRequest("Current selection is not a cylinder");
+        }
+        Object center = invoke(region, "getCenter");
+        Object radius = invoke(region, "getRadius");
+        int centerX = (int) Math.round((Double) invoke(center, "getX"));
+        int centerZ = (int) Math.round((Double) invoke(center, "getZ"));
+        double radiusX = (Double) invoke(radius, "getX");
+        double radiusZ = (Double) invoke(radius, "getZ");
+        int minY = (Integer) invoke(region, "getMinimumY");
+        int maxY = (Integer) invoke(region, "getMaximumY");
+        return new Cylinder(centerX, centerZ, radiusX, radiusZ, minY, maxY);
+    }
+
+    private Object selectedRegion(Object we, Object actor) {
+        Object session = session(we, actor);
+        Object world = invoke(session, "getSelectionWorld");
+        if (world == null) throw ApiException.badRequest("No selection world is set");
+        return invokeTranslating(session, "getSelection", INCOMPLETE_REGION_EXCEPTION,
+                "No selection is defined (or it is in a different world)", world);
+    }
+
+    // ---- cylinder edits (same mechanics as the Box overloads, different region construction) ----
+
+    @Override public int setBlocks(Object actor, Cylinder cylinder, String pattern) {
+        Object we = worldEdit();
+        Object region = cylinderRegion(cylinder);
+        Object patternObj = parsePattern(we, actor, pattern);
+        Object session = session(we, actor);
+        Object editSession = newEditSession(session, actor);
+        try {
+            return (Integer) invokeTranslating(editSession, "setBlocks", MAX_CHANGED_BLOCKS_EXCEPTION,
+                    "Edit exceeds the configured block change limit", region, patternObj);
+        } finally {
+            rememberAndClose(session, editSession);
+        }
+    }
+
+    @Override public int replaceBlocks(Object actor, Cylinder cylinder, String mask, String pattern) {
+        Object we = worldEdit();
+        Object region = cylinderRegion(cylinder);
+        Object maskObj = parseMask(we, actor, mask);
+        Object patternObj = parsePattern(we, actor, pattern);
+        Object session = session(we, actor);
+        Object editSession = newEditSession(session, actor);
+        try {
+            return (Integer) invokeTranslating(editSession, "replaceBlocks", MAX_CHANGED_BLOCKS_EXCEPTION,
+                    "Edit exceeds the configured block change limit", region, maskObj, patternObj);
+        } finally {
+            rememberAndClose(session, editSession);
+        }
+    }
+
+    /** Builds a {@code CylinderRegion} (verified 4-arg ctor: center, radius, minY, maxY - center's Y is
+     *  discarded internally, so 0 is passed). */
+    private Object cylinderRegion(Cylinder cylinder) {
+        Object center = blockVector3(cylinder.centerX(), 0, cylinder.centerZ());
+        Object radius = invokeStatic(load(VECTOR2), "at", cylinder.radiusX(), cylinder.radiusZ());
+        return create(CYLINDER_REGION, center, radius, cylinder.minY(), cylinder.maxY());
+    }
+
+    // ---- generation shapes ----
+
+    @Override public int makeSphere(Object actor, int x, int y, int z, double radiusX, double radiusY, double radiusZ, boolean filled, String pattern) {
+        Object we = worldEdit();
+        Object patternObj = parsePattern(we, actor, pattern);
+        Object pos = blockVector3(x, y, z);
+        Object session = session(we, actor);
+        Object editSession = newEditSession(session, actor);
+        try {
+            return (Integer) invokeTranslating(editSession, "makeSphere", MAX_CHANGED_BLOCKS_EXCEPTION,
+                    "Edit exceeds the configured block change limit", pos, patternObj, radiusX, radiusY, radiusZ, filled);
+        } finally {
+            rememberAndClose(session, editSession);
+        }
+    }
+
+    @Override public int makeCylinder(Object actor, int x, int y, int z, double radiusX, double radiusZ, int height, boolean filled, String pattern) {
+        Object we = worldEdit();
+        Object patternObj = parsePattern(we, actor, pattern);
+        Object pos = blockVector3(x, y, z);
+        Object session = session(we, actor);
+        Object editSession = newEditSession(session, actor);
+        try {
+            return (Integer) invokeTranslating(editSession, "makeCylinder", MAX_CHANGED_BLOCKS_EXCEPTION,
+                    "Edit exceeds the configured block change limit", pos, patternObj, radiusX, radiusZ, height, filled);
+        } finally {
+            rememberAndClose(session, editSession);
+        }
+    }
+
+    @Override public int makePyramid(Object actor, int x, int y, int z, int size, boolean filled, String pattern) {
+        Object we = worldEdit();
+        Object patternObj = parsePattern(we, actor, pattern);
+        Object pos = blockVector3(x, y, z);
+        Object session = session(we, actor);
+        Object editSession = newEditSession(session, actor);
+        try {
+            return (Integer) invokeTranslating(editSession, "makePyramid", MAX_CHANGED_BLOCKS_EXCEPTION,
+                    "Edit exceeds the configured block change limit", pos, patternObj, size, filled);
+        } finally {
+            rememberAndClose(session, editSession);
+        }
+    }
+
+    @Override public int hollowOutBox(Object actor, Box box, int thickness, String pattern) {
+        Object we = worldEdit();
+        Object region = region(box);
+        Object patternObj = parsePattern(we, actor, pattern);
+        Object session = session(we, actor);
+        Object editSession = newEditSession(session, actor);
+        try {
+            return (Integer) invokeTranslating(editSession, "hollowOutRegion", MAX_CHANGED_BLOCKS_EXCEPTION,
+                    "Edit exceeds the configured block change limit", region, thickness, patternObj);
+        } finally {
+            rememberAndClose(session, editSession);
+        }
     }
 
     // ---- transforms ----

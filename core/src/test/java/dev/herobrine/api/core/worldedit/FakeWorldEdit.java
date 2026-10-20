@@ -3,6 +3,7 @@ package dev.herobrine.api.core.worldedit;
 import com.sk89q.worldedit.EditSession;
 import com.sk89q.worldedit.MaxChangedBlocksException;
 import com.sk89q.worldedit.extension.input.InputParseException;
+import com.sk89q.worldedit.math.BlockVector3;
 import com.sk89q.worldedit.extent.clipboard.Clipboard;
 import com.sk89q.worldedit.extent.clipboard.io.ClipboardFormat;
 import com.sk89q.worldedit.extent.clipboard.io.ClipboardReader;
@@ -53,6 +54,26 @@ public final class FakeWorldEdit {
     public int replaceBlocks(EditSession session, Region region, Mask mask, Pattern pattern) throws MaxChangedBlocksException {
         calls.add("replaceBlocks:" + region + ":" + mask + ":" + pattern);
         return session.applyWithLimit(3);
+    }
+
+    public int makeSphere(EditSession session, BlockVector3 pos, Pattern block, double radiusX, double radiusY, double radiusZ, boolean filled) throws MaxChangedBlocksException {
+        calls.add("makeSphere:" + pos + ":" + block + ":" + radiusX + "," + radiusY + "," + radiusZ + ":" + filled);
+        return session.applyWithLimit(11);
+    }
+
+    public int makeCylinder(EditSession session, BlockVector3 pos, Pattern block, double radiusX, double radiusZ, int height, boolean filled) throws MaxChangedBlocksException {
+        calls.add("makeCylinder:" + pos + ":" + block + ":" + radiusX + "," + radiusZ + ":" + height + ":" + filled);
+        return session.applyWithLimit(13);
+    }
+
+    public int makePyramid(EditSession session, BlockVector3 position, Pattern block, int size, boolean filled) throws MaxChangedBlocksException {
+        calls.add("makePyramid:" + position + ":" + block + ":" + size + ":" + filled);
+        return session.applyWithLimit(17);
+    }
+
+    public int hollowOutRegion(EditSession session, Region region, int thickness, Pattern pattern) throws MaxChangedBlocksException {
+        calls.add("hollowOutRegion:" + region + ":" + thickness + ":" + pattern);
+        return session.applyWithLimit(5);
     }
 
     /**

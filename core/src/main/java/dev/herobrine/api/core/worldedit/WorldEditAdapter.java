@@ -68,6 +68,28 @@ public interface WorldEditAdapter {
      */
     Box selection(Object actor);
 
+    // ---- regions (non-cuboid): a WorldEdit CylinderRegion, the most common non-cuboid selection/edit
+    // shape - the same edits/selection reporting available for Box, additionally available for this shape.
+    // Other non-cuboid shapes (polygon, ellipsoid, convex) remain a documented gap - see docs/worldedit-coverage.md.
+
+    /**
+     * A cylindrical region: center x,z with vertical extent minY..maxY (inclusive), and radii along X and Z
+     * (equal for a circular cylinder). Maps exactly to a WorldEdit {@code CylinderRegion}.
+     */
+    record Cylinder(int centerX, int centerZ, double radiusX, double radiusZ, int minY, int maxY) {}
+
+    /** Fills a cylindrical region with a pattern. @return the number of blocks changed */
+    int setBlocks(Object actor, Cylinder cylinder, String pattern);
+    /** Replaces blocks matching a mask with a pattern inside a cylindrical region. @return the number of blocks changed */
+    int replaceBlocks(Object actor, Cylinder cylinder, String mask, String pattern);
+
+    /**
+     * The actor's current selection reported as a cylinder, only when the selector is exactly a
+     * CylinderRegion.
+     * @throws dev.herobrine.api.core.ApiException BAD_REQUEST if there's no selection, or the selector isn't a cylinder
+     */
+    Cylinder cylinderSelection(Object actor);
+
     // ---- transforms (compose onto the actor's clipboard transform; affect the next paste(), not past
     // pastes - this is WorldEdit's own //rotate and //flip semantics: non-destructive, stackable, applied
     // at paste time via ClipboardHolder.getTransform()) ----
@@ -85,4 +107,41 @@ public interface WorldEditAdapter {
      * on the next {@link #paste}.
      */
     void scaleClipboard(Object actor, double sx, double sy, double sz);
+
+    // ---- generation shapes (same actor/session/undo semantics as setBlocks: verified public EditSession
+    // methods, not a parallel implementation) ----
+
+    /**
+     * Generates a sphere, or an ellipsoid when the radii differ, of a pattern centered at x,y,z.
+     * @return the number of blocks changed
+     */
+    int makeSphere(Object actor, int x, int y, int z, double radiusX, double radiusY, double radiusZ, boolean filled, String pattern);
+
+    /**
+     * Generates a cylinder, or an elliptical one when radiusX != radiusZ, of a pattern with its base
+     * centered at x,y,z. A negative height extends downward instead of upward.
+     * @return the number of blocks changed
+     */
+    int makeCylinder(Object actor, int x, int y, int z, double radiusX, double radiusZ, int height, boolean filled, String pattern);
+
+    /** Generates a square pyramid of a pattern with its base centered at x,y,z. @return the number of blocks changed */
+    int makePyramid(Object actor, int x, int y, int z, int size, boolean filled, String pattern);
+
+    /**
+     * Replaces the blocks within {@code thickness} of the box's boundary with a pattern, leaving the
+     * interior untouched.
+     * @return the number of blocks changed
+     */
+    int hollowOutBox(Object actor, Box box, int thickness, String pattern);
+
+    // ---- paste options ----
+
+    /**
+     * Pastes the actor's clipboard with its origin at x,y,z, with explicit paste options mirroring
+     * WorldEdit's own {@code PasteBuilder} flags. {@link #paste(Object, int, int, int)} is this with
+     * WorldEdit's own builder defaults: ignoreAirBlocks=false, ignoreStructureVoidBlocks=false,
+     * copyEntities=true, copyBiomes=false.
+     */
+    void paste(Object actor, int x, int y, int z,
+               boolean ignoreAirBlocks, boolean ignoreStructureVoidBlocks, boolean copyEntities, boolean copyBiomes);
 }
