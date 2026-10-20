@@ -77,7 +77,7 @@ exposed: `click` (needs a mouse), file commands (`explorefilter`, `saveall`, `re
 | Lifecycle | `ServerLifecycle`, `ServerStartedEvent`/`ServerStoppingEvent` | — | — | — | server | Draft | Dedicated-server dist only; a client's own integrated/singleplayer server does not also start this |
 | Game thread | `DedicatedServerGameThread` (`MinecraftServer#execute`) | — | — | — | server | Draft | Mirrors `MinecraftGameThread`'s `CompletableFuture` pattern |
 | Config | `ServerConfig` (`ModConfig.Type.SERVER`) | — | — | — | server | Draft | Per-world `serverconfig/herobrine_api-server.toml` |
-| Auth | `Tokens.loadOrCreateSingle` | — | — | — | server | Tested (core) | One FULL-only key, `config/herobrine_api-server.token`; no read/write split server-side |
+| Auth | `Tokens.loadOrCreateSingle(SecretAccessor)`, `ServerApiKeyAccessor` | — | — | — | server | Tested (core: generic accessor + locking; neoforge: real end-to-end `runServer` run) | One FULL-only key stored as the `apiKey` field inside `serverconfig/herobrine_api-server.toml` itself (not a separate file); no read/write split server-side |
 | Honest capability reporting | `ApiContext.client = false` | `/capabilities` | — | — | server | Tested (core) | Client-only resources/actions are not registered at all server-side, rather than registered-and-broken |
 | Minimal server resources | `ServerBindings` | `server.info`, `server.players` | — | — | server | Draft | Deliberately minimal; proves the lifecycle, not a server game-data inventory (out of scope here) |
 

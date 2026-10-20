@@ -6,6 +6,7 @@ import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.config.ModConfig;
+import net.neoforged.fml.event.config.ModConfigEvent;
 import net.neoforged.fml.loading.FMLEnvironment;
 import net.neoforged.fml.loading.FMLPaths;
 import net.neoforged.neoforge.common.NeoForge;
@@ -33,6 +34,13 @@ public final class HerobrineApiMod {
             container.registerConfig(ModConfig.Type.CLIENT, ClientConfig.SPEC);
         }
         container.registerConfig(ModConfig.Type.SERVER, ServerConfig.SPEC);
+        // Capture the real on-disk path NeoForge resolves for ServerConfig's TOML the moment it
+        // loads (once per world start), rather than guessing it from FMLPaths ourselves.
+        modBus.addListener((ModConfigEvent.Loading event) -> {
+            if (event.getConfig().getSpec() == ServerConfig.SPEC) {
+                ServerConfig.configFilePath = event.getConfig().getFullPath();
+            }
+        });
 
         if (isClient) {
             ApiContext c = new ApiContext(new MinecraftGameThread());

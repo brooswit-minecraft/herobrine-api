@@ -82,11 +82,15 @@ final class ApiController {
         };
     }
 
-    /** Builds a {@link Tokens} loader for the dedicated server's single operator key. */
-    static Supplier<Tokens> serverTokens(Path dir) {
+    /**
+     * Builds a {@link Tokens} loader for the dedicated server's single operator key, stored as the
+     * {@code apiKey} field inside {@code serverconfig/herobrine_api-server.toml} (via {@code accessor})
+     * rather than a separate file -- see {@link ServerApiKeyAccessor}.
+     */
+    static Supplier<Tokens> serverConfigTokens(Tokens.SecretAccessor accessor) {
         return () -> {
             try {
-                return Tokens.loadOrCreateSingle(dir.resolve(SERVER_TOKEN_FILE));
+                return Tokens.loadOrCreateSingle(accessor);
             } catch (IOException e) {
                 throw new java.io.UncheckedIOException(e);
             }
@@ -95,5 +99,4 @@ final class ApiController {
 
     static final String CLIENT_FULL_TOKEN_FILE = "herobrine_api.token";
     static final String CLIENT_READ_TOKEN_FILE = "herobrine_api.read-token";
-    static final String SERVER_TOKEN_FILE = "herobrine_api-server.token";
 }

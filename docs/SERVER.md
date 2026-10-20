@@ -12,9 +12,9 @@ the client build.
 | Entry point | `ClientLifecycle` (`FMLClientSetupEvent`) | `ServerLifecycle` (`ServerStartedEvent` / `ServerStoppingEvent`) |
 | Game thread | `MinecraftGameThread` (`Minecraft.getInstance().execute`) | `DedicatedServerGameThread` (`MinecraftServer.execute`) |
 | Config | `config/herobrine_api-client.toml` (`ModConfig.Type.CLIENT`) | `serverconfig/herobrine_api-server.toml`, per world (`ModConfig.Type.SERVER`) |
-| Key(s) | `config/herobrine_api.token` (full) + `config/herobrine_api.read-token` (read-only) | one key, `config/herobrine_api-server.token` (full access only -- there is no read-only split server-side) |
+| Key(s) | `config/herobrine_api.token` (full) + `config/herobrine_api.read-token` (read-only), each its own file | one key, the `apiKey` field **inside** `serverconfig/herobrine_api-server.toml` itself (full access only -- there is no read-only split server-side, and no separate key file) |
 | Default port | `25580` | `25581` |
-| `/herobrine_api on\|off\|status\|regenerate` | yes, client command | not available -- toggle via `serverconfig/herobrine_api-server.toml` (`enabled`) and restart, or edit the key file directly; this is a deliberate scope limit (no server command console UI was added) |
+| `/herobrine_api on\|off\|status\|regenerate` | yes, client command | not available -- toggle via `serverconfig/herobrine_api-server.toml` (`enabled`) and restart, or edit `apiKey` in that same file directly; this is a deliberate scope limit (no server command console UI was added) |
 | `capabilities.client` | `true` | `false` -- reported honestly, not silently omitted |
 | Resources/actions | the full client set (world, entities, inventory, crafting, stations, chat, input, Baritone) | `server.info`, `server.players` only -- the client-only bindings are never registered server-side, because they are meaningless there, not because they "failed" |
 | Multiplayer control-block | yes, `allowControlOnMultiplayer` | not applicable -- the server has no "someone else's server" concept |
@@ -26,19 +26,20 @@ second, server-side API instance.
 ## Enabling it
 
 1. Install the mod jar in the dedicated server's `mods/` folder like any other NeoForge mod.
-2. Start the server once. It creates:
-   - `serverconfig/herobrine_api-server.toml` (the `enabled`/`port`/limits config, written into the
-     world's save directory the first time that world starts)
-   - `config/herobrine_api-server.token` (the operator key -- owner-only file permissions where the
-     filesystem supports them)
+2. Start the server once. It creates `serverconfig/herobrine_api-server.toml` in the world's save
+   directory, with `enabled`/`port`/the size limits, **and** the operator key itself as the
+   `apiKey` field in that same file -- generated fresh the first time the API starts (it is written
+   back into the file as soon as it's generated; you don't need to restart to see it).
 3. `enabled = true` by default, listening on `127.0.0.1:25581`. Set `enabled = false` and restart to
    turn it off.
-4. Read the key: `cat config/herobrine_api-server.token`. If that file is ever missing, deleted,
-   empty, or whitespace-only, the *next* request (or server start) regenerates and persists a fresh
-   one automatically -- no server restart required for that recovery.
+4. Read the key: `grep apiKey serverconfig/herobrine_api-server.toml`. If that field is ever
+   found missing, deleted, empty, or whitespace-only, the *next* request (or server start)
+   regenerates it and writes it back into this same file automatically -- no server restart
+   required for that recovery. (NeoForge does not live-watch this file for *external* edits while
+   the server is running, so hand-editing `apiKey` yourself only takes effect on the next start.)
 
 ```
-H="Authorization: Bearer $(cat config/herobrine_api-server.token)"
+H="Authorization: Bearer $(grep apiKey serverconfig/herobrine_api-server.toml | cut -d'"' -f2)"
 curl -H "$H" 127.0.0.1:25581/api/v1/resources/server.info
 curl -H "$H" 127.0.0.1:25581/api/v1/resources/server.players
 ```

@@ -3,8 +3,11 @@ package dev.herobrine.api.core;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.Callable;
@@ -333,6 +336,185 @@ class TokensTest {
         } finally {
             Files.setPosixFilePermissions(dir, original);
         }
+    }
+
+    // ---- single-key via SecretAccessor: the mechanism the dedicated server actually uses,
+    // storing the key as one field inside a larger shared file (ServerApiKeyAccessor does the same
+    // thing against ServerConfig.API_KEY inside serverconfig/herobrine_api-server.toml; this fake
+    // exercises the identical Tokens.SecretAccessor contract and locking without needing NeoForge).
+
+    @Test void accessorKeyIsCreatedWhenMissingAndLeavesOtherFieldsAlone() throws IOException {
+        Path f = tmp.resolve("shared.cfg");
+        FakeFieldAccessor.seed(f, "enabled=true", "port=25581", "apiKey=", "maxEditVolume=100000");
+        Tokens t = Tokens.loadOrCreateSingle(new FakeFieldAccessor(f));
+        String secret = FakeFieldAccessor.readField(f);
+        assertTrue(secret.length() >= 32);
+        assertEquals(Tokens.Access.FULL, t.authenticate(secret).orElseThrow());
+        assertEquals(List.of("enabled=true", "port=25581", "apiKey=" + secret, "maxEditVolume=100000"),
+                Files.readAllLines(f, StandardCharsets.UTF_8));
+    }
+
+    @Test void accessorKeyRegeneratesOnDeletionWithoutRestart() throws IOException {
+        Path f = tmp.resolve("shared.cfg");
+        FakeFieldAccessor.seed(f, "enabled=true", "apiKey=");
+        Tokens t = Tokens.loadOrCreateSingle(new FakeFieldAccessor(f));
+        String original = FakeFieldAccessor.readField(f);
+
+        Files.delete(f);
+        assertTrue(t.authenticate(original).isEmpty(), "old key must stop working once the backing file is gone");
+        assertTrue(Files.isRegularFile(f), "a missing key is regenerated on next access, no restart");
+        String regenerated = FakeFieldAccessor.readField(f);
+        assertNotEquals(original, regenerated);
+        assertEquals(Tokens.Access.FULL, t.authenticate(regenerated).orElseThrow());
+    }
+
+    @Test void accessorKeyRegeneratesOnWhitespaceOnlyValue() throws IOException {
+        Path f = tmp.resolve("shared.cfg");
+        FakeFieldAccessor.seed(f, "enabled=true", "apiKey=");
+        Tokens t = Tokens.loadOrCreateSingle(new FakeFieldAccessor(f));
+
+        FakeFieldAccessor.writeField(f, "   \t  ");
+        t.authenticate("probe-only-not-the-real-key");
+        String regenerated = FakeFieldAccessor.readField(f);
+        assertTrue(regenerated.length() >= 32);
+        assertEquals(Tokens.Access.FULL, t.authenticate(regenerated).orElseThrow());
+    }
+
+    @Test void accessorKeyStableAcrossRepeatedAccessAndPreservesOtherFields() throws IOException {
+        Path f = tmp.resolve("shared.cfg");
+        FakeFieldAccessor.seed(f, "enabled=true", "port=25581", "apiKey=");
+        Tokens t = Tokens.loadOrCreateSingle(new FakeFieldAccessor(f));
+        String s1 = FakeFieldAccessor.readField(f);
+        for (int i = 0; i < 5; i++) t.authenticate(s1);
+        assertEquals(s1, FakeFieldAccessor.readField(f));
+        assertEquals(List.of("enabled=true", "port=25581", "apiKey=" + s1), Files.readAllLines(f, StandardCharsets.UTF_8));
+
+        Tokens t2 = Tokens.loadOrCreateSingle(new FakeFieldAccessor(f)); // "restart": same file, same secret
+        assertEquals(Tokens.Access.FULL, t2.authenticate(s1).orElseThrow());
+    }
+
+    @Test void accessorKeyPersistedValueIsTheOneThatBecomesActive() throws IOException {
+        Path f = tmp.resolve("shared.cfg");
+        FakeFieldAccessor.seed(f, "apiKey=");
+        Tokens t = Tokens.loadOrCreateSingle(new FakeFieldAccessor(f));
+        FakeFieldAccessor.writeField(f, "");
+        t.authenticate("anything");
+        String onDisk = FakeFieldAccessor.readField(f);
+        assertEquals(Tokens.Access.FULL, t.authenticate(onDisk).orElseThrow());
+    }
+
+    @Test void accessorKeyOldKeyRejectedAfterRotate() throws IOException {
+        Path f = tmp.resolve("shared.cfg");
+        FakeFieldAccessor.seed(f, "enabled=true", "apiKey=");
+        Tokens t = Tokens.loadOrCreateSingle(new FakeFieldAccessor(f));
+        String original = FakeFieldAccessor.readField(f);
+
+        t.regenerate();
+        assertTrue(t.authenticate(original).isEmpty(), "the old key must stop working immediately after regenerate()");
+        String rotated = FakeFieldAccessor.readField(f);
+        assertNotEquals(original, rotated);
+        assertEquals(Tokens.Access.FULL, t.authenticate(rotated).orElseThrow());
+        assertEquals("enabled=true", Files.readAllLines(f, StandardCharsets.UTF_8).get(0));
+    }
+
+    @Test void accessorKeyPersistenceFailureOnInitialCreateFailsClosed() throws IOException {
+        Path f = tmp.resolve("shared.cfg");
+        FakeFieldAccessor.seed(f, "enabled=true", "apiKey="); // blank: needs an initial regenerate
+        assertThrows(IOException.class, () -> Tokens.loadOrCreateSingle(new FakeFieldAccessor(f, true)));
+        assertEquals(List.of("enabled=true", "apiKey="), Files.readAllLines(f, StandardCharsets.UTF_8),
+                "nothing should be left behind, and other fields must be untouched, on a failed persist");
+    }
+
+    @Test void accessorKeyPersistenceFailureOnLaterRegenerateFailsClosedAndLeaksNoSecret() throws IOException {
+        Path f = tmp.resolve("shared.cfg");
+        FakeFieldAccessor.seed(f, "enabled=true", "apiKey=");
+        // Construction succeeds: the initial regenerate's write is allowed through here.
+        Tokens setupOnly = Tokens.loadOrCreateSingle(new FakeFieldAccessor(f));
+        String original = FakeFieldAccessor.readField(f);
+        assertTrue(original.length() >= 32);
+
+        // A second Tokens instance, backed by a FAILING accessor, constructed while the field is
+        // still valid (so its constructor needs no write and also succeeds) -- this is exactly the
+        // "existing controller instance later needs to regenerate" scenario.
+        Tokens t = Tokens.loadOrCreateSingle(new FakeFieldAccessor(f, true));
+        assertEquals(Tokens.Access.FULL, t.authenticate(original).orElseThrow());
+
+        FakeFieldAccessor.writeField(f, ""); // now blank it: the next access must regenerate, and fail
+        Tokens.TokensUnavailableException thrown = assertThrows(Tokens.TokensUnavailableException.class,
+                () -> t.authenticate("probe-value-that-must-not-leak"),
+                "a regenerate that cannot persist must fail closed, not hand out an unsaved key");
+        assertFalse(thrown.getMessage().contains("probe-value-that-must-not-leak"));
+        assertFalse(thrown.getMessage().contains(original));
+        assertEquals("", FakeFieldAccessor.readField(f), "no unsaved key should appear in the field");
+        assertEquals("enabled=true", Files.readAllLines(f, StandardCharsets.UTF_8).get(0), "other fields must be untouched");
+    }
+
+    @Test void accessorKeyConcurrentAccessConvergesOnOneValue() throws Exception {
+        Path f = tmp.resolve("shared.cfg");
+        FakeFieldAccessor.seed(f, "enabled=true", "apiKey=");
+        assertConvergesOnOneValue(() -> {
+            Tokens.loadOrCreateSingle(new FakeFieldAccessor(f)); // simulates independent racing accessors
+            return FakeFieldAccessor.readField(f);
+        });
+    }
+
+    /** Simulates the dedicated server's real backing: the secret as one field inside a larger
+     * shared file alongside unrelated settings, exercised through the exact same
+     * {@link Tokens.SecretAccessor} contract {@code ServerApiKeyAccessor} uses against
+     * {@code ServerConfig.API_KEY} -- this is the file-I/O-and-locking half of that mechanism,
+     * without depending on NeoForge's config system itself. */
+    private static final class FakeFieldAccessor implements Tokens.SecretAccessor {
+        private static final String PREFIX = "apiKey=";
+        private final Path file;
+        private final boolean failWrites;
+
+        FakeFieldAccessor(Path file) { this(file, false); }
+        FakeFieldAccessor(Path file, boolean failWrites) { this.file = file; this.failWrites = failWrites; }
+
+        static void seed(Path file, String... lines) throws IOException {
+            Files.write(file, List.of(lines), StandardCharsets.UTF_8);
+        }
+
+        static String readField(Path file) throws IOException {
+            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8))
+                if (line.startsWith(PREFIX)) return line.substring(PREFIX.length());
+            throw new IllegalStateException("no apiKey= line in " + file);
+        }
+
+        static void writeField(Path file, String rawValue) throws IOException {
+            List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+            List<String> out = new ArrayList<>();
+            for (String line : lines) out.add(line.startsWith(PREFIX) ? PREFIX + rawValue : line);
+            Files.write(file, out, StandardCharsets.UTF_8);
+        }
+
+        @Override public String read() throws IOException {
+            if (!Files.isRegularFile(file)) return null;
+            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                if (line.startsWith(PREFIX)) {
+                    String v = line.substring(PREFIX.length()).trim();
+                    return v.length() >= 32 ? v : null;
+                }
+            }
+            return null;
+        }
+
+        @Override public void write(String secret) throws IOException {
+            if (failWrites) throw new IOException("simulated persistence failure for " + file);
+            List<String> lines = Files.isRegularFile(file) ? Files.readAllLines(file, StandardCharsets.UTF_8) : new ArrayList<>();
+            List<String> out = new ArrayList<>();
+            boolean replaced = false;
+            for (String line : lines) {
+                if (line.startsWith(PREFIX)) { out.add(PREFIX + secret); replaced = true; }
+                else out.add(line);
+            }
+            if (!replaced) out.add(PREFIX + secret);
+            Path tmp = file.resolveSibling(file.getFileName().toString() + ".tmp");
+            Files.write(tmp, out, StandardCharsets.UTF_8);
+            Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        }
+
+        @Override public Path lockAnchor() { return file; }
     }
 
     // ---- shared concurrency helper ----

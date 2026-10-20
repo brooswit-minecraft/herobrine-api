@@ -4,7 +4,6 @@ import com.mojang.logging.LogUtils;
 import dev.herobrine.api.core.ApiContext;
 import net.minecraft.server.MinecraftServer;
 import net.neoforged.bus.api.IEventBus;
-import net.neoforged.fml.loading.FMLPaths;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import org.slf4j.Logger;
@@ -40,8 +39,18 @@ final class ServerLifecycle {
         ctx.controlBlock = () -> null;
         ServerBindings.register(ctx, server);
 
+        java.nio.file.Path configFile = ServerConfig.configFilePath;
+        if (configFile == null) {
+            // ModConfigEvent.Loading for ServerConfig.SPEC never fired before the server finished
+            // starting -- should not happen (SERVER-type configs load before ServerStartedEvent),
+            // but fail safe rather than NPE deep inside the accessor.
+            LOG.error("Herobrine API (dedicated server) could not start: its config file path was never captured");
+            return;
+        }
+        ServerApiKeyAccessor keyAccessor = new ServerApiKeyAccessor(ServerConfig.API_KEY, configFile);
+
         ApiController c = new ApiController(ctx,
-                ApiController.serverTokens(FMLPaths.CONFIGDIR.get()),
+                ApiController.serverConfigTokens(keyAccessor),
                 ServerConfig.PORT::get,
                 () -> {}); // nothing client-only to release on this platform
         controller = c;
