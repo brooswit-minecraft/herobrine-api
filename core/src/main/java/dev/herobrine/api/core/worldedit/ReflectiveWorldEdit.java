@@ -1,0 +1,339 @@
+package dev.herobrine.api.core.worldedit;
+
+import dev.herobrine.api.core.ApiException;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.util.LinkedHashSet;
+import java.util.Set;
+
+/**
+ * {@link WorldEditAdapter} that talks to WorldEdit's API by reflection, so WorldEdit stays an optional
+ * runtime dependency and no WorldEdit class is loaded before {@link #installed()} is checked. Every class
+ * and method name below was verified against the real WorldEdit 7.3.8 sources (the last {@code
+ * worldedit-neoforge-mc1.21} build, which covers Minecraft/NeoForge 1.21.1 - see docs/COVERAGE.md); none
+ * are guessed. WorldEdit's command dispatcher is deliberately never used - every call below maps directly
+ * to the same WorldEdit Java API methods its own commands use (verified against {@code
+ * command/ClipboardCommands.java} and {@code extension/platform/PlatformCommandManager.java} in the
+ * 7.3.8 sources), including the {@code LocalSession#remember} bookkeeping that WorldEdit's own command
+ * dispatcher performs after every edit so undo/redo keep working.
+ */
+public final class ReflectiveWorldEdit implements WorldEditAdapter {
+    private static final String WORLDEDIT = "com.sk89q.worldedit.WorldEdit";
+    private static final String BLOCK_VECTOR3 = "com.sk89q.worldedit.math.BlockVector3";
+    private static final String CUBOID_REGION = "com.sk89q.worldedit.regions.CuboidRegion";
+    private static final String PARSER_CONTEXT = "com.sk89q.worldedit.extension.input.ParserContext";
+    private static final String CLIPBOARD_HOLDER = "com.sk89q.worldedit.session.ClipboardHolder";
+    private static final String BLOCK_ARRAY_CLIPBOARD = "com.sk89q.worldedit.extent.clipboard.BlockArrayClipboard";
+    private static final String CLIPBOARD_FORMATS = "com.sk89q.worldedit.extent.clipboard.io.ClipboardFormats";
+    private static final String FORWARD_EXTENT_COPY = "com.sk89q.worldedit.function.operation.ForwardExtentCopy";
+    private static final String OPERATIONS = "com.sk89q.worldedit.function.operation.Operations";
+
+    // Checked exceptions worth translating into a specific ApiException rather than a generic 500.
+    private static final String INCOMPLETE_REGION_EXCEPTION = "com.sk89q.worldedit.IncompleteRegionException";
+    private static final String EMPTY_CLIPBOARD_EXCEPTION = "com.sk89q.worldedit.EmptyClipboardException";
+    private static final String MAX_CHANGED_BLOCKS_EXCEPTION = "com.sk89q.worldedit.MaxChangedBlocksException";
+    private static final String INPUT_PARSE_EXCEPTION = "com.sk89q.worldedit.extension.input.InputParseException";
+
+    /** The WorldEdit version branch this adapter was verified against (see class Javadoc). */
+    private static final String SUPPORTED_VERSION_PREFIX = "7.3.";
+
+    private final ClassLoader loader;
+
+    public ReflectiveWorldEdit(ClassLoader loader) {
+        this.loader = loader;
+    }
+
+    // ---- availability ----
+
+    @Override public boolean installed() {
+        try { Class.forName(WORLDEDIT, false, loader); return true; }
+        catch (ClassNotFoundException | LinkageError e) { return false; }
+    }
+
+    @Override public String version() {
+        if (!installed()) return null;
+        Object v = invokeStatic(load(WORLDEDIT), "getVersion");
+        return v == null ? null : v.toString();
+    }
+
+    /** @return the WorldEdit instance, after checking the installed build is a verified-compatible version. */
+    private Object worldEdit() {
+        if (!installed()) throw ApiException.unavailable("WorldEdit is not installed");
+        String v = version();
+        if (v == null || !v.startsWith(SUPPORTED_VERSION_PREFIX)) {
+            throw new ApiException(501, "UNSUPPORTED",
+                    "Installed WorldEdit " + v + " is not in the verified " + SUPPORTED_VERSION_PREFIX
+                            + "x branch (worldedit-neoforge-mc1.21, NeoForge/Minecraft 1.21.1)");
+        }
+        return invokeStatic(load(WORLDEDIT), "getInstance");
+    }
+
+    private Object session(Object we, Object actor) {
+        return invoke(invoke(we, "getSessionManager"), "get", actor);
+    }
+
+    // ---- edits ----
+
+    @Override public int setBlocks(Object actor, Box box, String pattern) {
+        Object we = worldEdit();
+        Object region = region(box);
+        Object patternObj = parsePattern(we, actor, pattern);
+        Object editSession = invoke(we, "newEditSession", actor);
+        try {
+            int changed = (Integer) invokeTranslating(editSession, "setBlocks", MAX_CHANGED_BLOCKS_EXCEPTION,
+                    "Edit exceeds the configured block change limit", region, patternObj);
+            invoke(session(we, actor), "remember", editSession);
+            return changed;
+        } finally {
+            invoke(editSession, "close");
+        }
+    }
+
+    @Override public int replaceBlocks(Object actor, Box box, String mask, String pattern) {
+        Object we = worldEdit();
+        Object region = region(box);
+        Object maskObj = parseMask(we, actor, mask);
+        Object patternObj = parsePattern(we, actor, pattern);
+        Object editSession = invoke(we, "newEditSession", actor);
+        try {
+            int changed = (Integer) invokeTranslating(editSession, "replaceBlocks", MAX_CHANGED_BLOCKS_EXCEPTION,
+                    "Edit exceeds the configured block change limit", region, maskObj, patternObj);
+            invoke(session(we, actor), "remember", editSession);
+            return changed;
+        } finally {
+            invoke(editSession, "close");
+        }
+    }
+
+    // ---- history ----
+
+    @Override public boolean undo(Object actor) {
+        Object we = worldEdit();
+        return invoke(session(we, actor), "undo", null, actor) != null;
+    }
+
+    @Override public boolean redo(Object actor) {
+        Object we = worldEdit();
+        return invoke(session(we, actor), "redo", null, actor) != null;
+    }
+
+    // ---- clipboard / schematics ----
+
+    @Override public void copy(Object actor, Box box) {
+        Object we = worldEdit();
+        Object region = region(box);
+        Object session = session(we, actor);
+        Object clipboard = create(BLOCK_ARRAY_CLIPBOARD, region);
+        Object origin = invokeTranslating(session, "getPlacementPosition", INCOMPLETE_REGION_EXCEPTION,
+                "No selection is defined for the placement position", actor);
+        invoke(clipboard, "setOrigin", origin);
+        Object editSession = invoke(we, "newEditSession", actor);
+        try {
+            Object minPoint = invoke(region, "getMinimumPoint");
+            Object copyOp = create(FORWARD_EXTENT_COPY, editSession, region, clipboard, minPoint);
+            invokeStatic(load(OPERATIONS), "completeLegacy", copyOp);
+            invoke(session, "setClipboard", create(CLIPBOARD_HOLDER, clipboard));
+        } finally {
+            invoke(editSession, "close");
+        }
+    }
+
+    @Override public void paste(Object actor, int x, int y, int z) {
+        Object we = worldEdit();
+        Object session = session(we, actor);
+        Object holder = invokeTranslating(session, "getClipboard", EMPTY_CLIPBOARD_EXCEPTION, "No clipboard is set");
+        Object editSession = invoke(we, "newEditSession", actor);
+        try {
+            Object to = blockVector3(x, y, z);
+            Object pasteBuilder = invoke(holder, "createPaste", editSession);
+            pasteBuilder = invoke(pasteBuilder, "to", to);
+            Object operation = invoke(pasteBuilder, "build");
+            invokeStatic(load(OPERATIONS), "completeLegacy", operation);
+            invoke(session, "remember", editSession);
+        } finally {
+            invoke(editSession, "close");
+        }
+    }
+
+    @Override public void saveSchematic(Object actor, File file) {
+        Object we = worldEdit();
+        Object format = invokeStatic(load(CLIPBOARD_FORMATS), "findByFile", file);
+        if (format == null) throw ApiException.badRequest("Unrecognized schematic format for file " + file.getName());
+        Object session = session(we, actor);
+        Object holder = invokeTranslating(session, "getClipboard", EMPTY_CLIPBOARD_EXCEPTION, "No clipboard is set");
+        Object clipboard = invoke(holder, "getClipboard");
+        try (FileOutputStream out = new FileOutputStream(file)) {
+            Object writer = invoke(format, "getWriter", out);
+            try { invoke(writer, "write", clipboard); } finally { invoke(writer, "close"); }
+        } catch (IOException e) {
+            throw new ApiException(500, "ACTION_FAILED", "Cannot write schematic " + file.getName() + ": " + e);
+        }
+    }
+
+    @Override public void loadSchematic(Object actor, File file) {
+        Object we = worldEdit();
+        Object format = invokeStatic(load(CLIPBOARD_FORMATS), "findByFile", file);
+        if (format == null) throw ApiException.badRequest("Unrecognized schematic format for file " + file.getName());
+        Object clipboard;
+        try (FileInputStream in = new FileInputStream(file)) {
+            Object reader = invoke(format, "getReader", in);
+            try { clipboard = invoke(reader, "read"); } finally { invoke(reader, "close"); }
+        } catch (IOException e) {
+            throw new ApiException(500, "ACTION_FAILED", "Cannot read schematic " + file.getName() + ": " + e);
+        }
+        invoke(session(we, actor), "setClipboard", create(CLIPBOARD_HOLDER, clipboard));
+    }
+
+    // ---- selection ----
+
+    @Override public Box selection(Object actor) {
+        Object we = worldEdit();
+        Object session = session(we, actor);
+        Object world = invoke(session, "getSelectionWorld");
+        if (world == null) throw ApiException.badRequest("No selection world is set");
+        Object region = invokeTranslating(session, "getSelection", INCOMPLETE_REGION_EXCEPTION,
+                "No selection is defined (or it is in a different world)", world);
+        Object min = invoke(region, "getMinimumPoint");
+        Object max = invoke(region, "getMaximumPoint");
+        return new Box((Integer) invoke(min, "getX"), (Integer) invoke(min, "getY"), (Integer) invoke(min, "getZ"),
+                (Integer) invoke(max, "getX"), (Integer) invoke(max, "getY"), (Integer) invoke(max, "getZ"));
+    }
+
+    // ---- shared construction helpers ----
+
+    private Object region(Box box) {
+        Object pos1 = blockVector3(box.minX(), box.minY(), box.minZ());
+        Object pos2 = blockVector3(box.maxX(), box.maxY(), box.maxZ());
+        return create(CUBOID_REGION, pos1, pos2);
+    }
+
+    private Object blockVector3(int x, int y, int z) {
+        return invokeStatic(load(BLOCK_VECTOR3), "at", x, y, z);
+    }
+
+    private Object parsePattern(Object we, Object actor, String pattern) {
+        Object parserContext = parserContext(actor);
+        Object factory = invoke(we, "getPatternFactory");
+        return invokeTranslating(factory, "parseFromInput", INPUT_PARSE_EXCEPTION,
+                "Invalid pattern: " + pattern, pattern, parserContext);
+    }
+
+    private Object parseMask(Object we, Object actor, String mask) {
+        Object parserContext = parserContext(actor);
+        Object factory = invoke(we, "getMaskFactory");
+        return invokeTranslating(factory, "parseFromInput", INPUT_PARSE_EXCEPTION,
+                "Invalid mask: " + mask, mask, parserContext);
+    }
+
+    private Object parserContext(Object actor) {
+        Object ctx = create(PARSER_CONTEXT);
+        invoke(ctx, "setActor", actor);
+        return ctx;
+    }
+
+    /** Like {@link #invoke}, but translates a specific checked exception into a 400 with a friendlier message. */
+    private Object invokeTranslating(Object target, String name, String checkedExceptionClass, String friendlyMessage, Object... args) {
+        try {
+            return invoke(target, name, args);
+        } catch (ApiException e) {
+            if (causedBy(e, checkedExceptionClass)) throw ApiException.badRequest(friendlyMessage);
+            throw e;
+        }
+    }
+
+    private boolean causedBy(ApiException e, String exceptionClassName) {
+        Throwable cause = e.getCause();
+        if (cause == null) return false;
+        try { return Class.forName(exceptionClassName, false, loader).isInstance(cause); }
+        catch (ClassNotFoundException | LinkageError ex) { return false; }
+    }
+
+    // ---- reflection helpers (same technique as ReflectiveBaritone) ----
+
+    private Class<?> load(String name) {
+        try { return Class.forName(name, false, loader); }
+        catch (ClassNotFoundException | LinkageError e) { throw ApiException.unavailable("WorldEdit class not found: " + name); }
+    }
+
+    private Object create(String className, Object... args) {
+        Class<?> c = load(className);
+        for (Constructor<?> k : c.getConstructors()) {
+            if (!paramsMatch(k.getParameterTypes(), args)) continue;
+            try { return k.newInstance(args); }
+            catch (InvocationTargetException e) { throw new ApiException(500, "ACTION_FAILED", className + " rejected arguments: " + e.getCause()); }
+            catch (ReflectiveOperationException e) { throw new ApiException(500, "ACTION_FAILED", "Cannot construct " + className + ": " + e); }
+        }
+        throw new ApiException(501, "UNSUPPORTED", "Installed WorldEdit has no matching constructor for " + className);
+    }
+
+    private static Object invoke(Object target, String name, Object... args) {
+        return run(findMethod(target.getClass(), name, args), target, name, args);
+    }
+
+    private static Object invokeStatic(Class<?> c, String name, Object... args) {
+        return run(findMethod(c, name, args), null, name, args);
+    }
+
+    private static Object run(Method m, Object target, String name, Object[] args) {
+        try { return m.invoke(target, args); }
+        catch (InvocationTargetException e) {
+            ApiException ex = new ApiException(500, "ACTION_FAILED", "WorldEdit " + name + " failed: " + e.getCause());
+            ex.initCause(e.getCause());
+            throw ex;
+        }
+        catch (IllegalAccessException e) { throw new ApiException(501, "UNSUPPORTED", "WorldEdit " + name + " is not accessible: " + e.getMessage()); }
+    }
+
+    /** Prefers methods declared on public interfaces (always accessible), then the class itself. */
+    private static Method findMethod(Class<?> c, String name, Object[] args) {
+        for (Class<?> i : allInterfaces(c))
+            for (Method m : i.getMethods())
+                if (m.getName().equals(name) && paramsMatch(m.getParameterTypes(), args)) return m;
+        for (Method m : c.getMethods()) {
+            if (m.getName().equals(name) && paramsMatch(m.getParameterTypes(), args)) {
+                m.trySetAccessible();
+                return m;
+            }
+        }
+        throw new ApiException(501, "UNSUPPORTED",
+                "Installed WorldEdit does not provide " + c.getSimpleName() + "." + name + "/" + args.length);
+    }
+
+    private static Set<Class<?>> allInterfaces(Class<?> c) {
+        Set<Class<?>> out = new LinkedHashSet<>();
+        if (c.isInterface()) out.add(c);
+        for (Class<?> k = c; k != null; k = k.getSuperclass()) collect(k, out);
+        out.removeIf(i -> !java.lang.reflect.Modifier.isPublic(i.getModifiers()));
+        return out;
+    }
+
+    private static void collect(Class<?> c, Set<Class<?>> out) {
+        for (Class<?> i : c.getInterfaces()) { if (out.add(i)) collect(i, out); }
+    }
+
+    private static boolean paramsMatch(Class<?>[] types, Object[] args) {
+        if (types.length != args.length) return false;
+        for (int i = 0; i < types.length; i++) {
+            Class<?> t = wrap(types[i]);
+            if (args[i] == null ? types[i].isPrimitive() : !t.isInstance(args[i])) return false;
+        }
+        return true;
+    }
+
+    private static Class<?> wrap(Class<?> t) {
+        if (!t.isPrimitive()) return t;
+        if (t == int.class) return Integer.class;
+        if (t == boolean.class) return Boolean.class;
+        if (t == long.class) return Long.class;
+        if (t == double.class) return Double.class;
+        if (t == float.class) return Float.class;
+        if (t == short.class) return Short.class;
+        if (t == byte.class) return Byte.class;
+        return Character.class;
+    }
+}

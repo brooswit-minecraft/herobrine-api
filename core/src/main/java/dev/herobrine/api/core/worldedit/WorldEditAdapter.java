@@ -1,0 +1,70 @@
+package dev.herobrine.api.core.worldedit;
+
+import java.io.File;
+
+/**
+ * Typed facade over WorldEdit's published Java API (com.sk89q.worldedit.*), verified against WorldEdit
+ * 7.3.8 ({@code worldedit-neoforge-mc1.21}, the last build published for Minecraft 1.21.x before the
+ * artifact line split per-patch at 1.21.3 — see docs/COVERAGE.md for the full version note). Every method
+ * throws {@code ApiException}: {@code UNSUPPORTED} (501) when the installed build lacks the underlying
+ * API call or is an incompatible version, {@code ACTION_UNAVAILABLE} (409) when WorldEdit is absent.
+ * WorldEdit's command dispatcher is deliberately not used; every call maps directly to a WorldEdit Java
+ * API method. {@code actor} is an opaque WorldEdit {@code Actor} (also {@code Locatable}) instance; only
+ * the platform module can construct one (wrapping a Minecraft player) - see MINECRAFT-476.
+ */
+public interface WorldEditAdapter {
+    /** Inclusive axis-aligned box between two corners, in any order; maps to a WorldEdit {@code CuboidRegion}. */
+    record Box(int x1, int y1, int z1, int x2, int y2, int z2) {
+        public int minX() { return Math.min(x1, x2); }
+        public int minY() { return Math.min(y1, y2); }
+        public int minZ() { return Math.min(z1, z2); }
+        public int maxX() { return Math.max(x1, x2); }
+        public int maxY() { return Math.max(y1, y2); }
+        public int maxZ() { return Math.max(z1, z2); }
+    }
+
+    boolean installed();
+    /** WorldEdit's self-reported version string (e.g. "7.3.8+1379-7d32b45"), or null if absent. */
+    String version();
+
+    // ---- edits (actor-scoped: each opens an EditSession tied to the actor's LocalSession, applies the
+    // change, records it in the session's undo history, then closes the session) ----
+
+    /**
+     * Fills the box with a pattern, in WorldEdit's own pattern syntax (e.g. "stone", "50%stone,50%dirt").
+     * @return the number of blocks changed
+     */
+    int setBlocks(Object actor, Box box, String pattern);
+
+    /**
+     * Replaces blocks matching a mask (WorldEdit mask syntax, e.g. "stone,dirt") with a pattern inside the box.
+     * @return the number of blocks changed
+     */
+    int replaceBlocks(Object actor, Box box, String mask, String pattern);
+
+    // ---- history (WorldEdit-owned, per actor LocalSession; no separate queue of our own) ----
+
+    /** @return whether an edit was undone */
+    boolean undo(Object actor);
+    /** @return whether an edit was redone */
+    boolean redo(Object actor);
+
+    // ---- clipboard / schematics (the actor's WorldEdit clipboard; one per LocalSession, like the game) ----
+
+    /** Copies the box into the actor's clipboard, origin at the box's minimum corner. */
+    void copy(Object actor, Box box);
+    /** Pastes the actor's clipboard with its origin at x,y,z. */
+    void paste(Object actor, int x, int y, int z);
+    /** Writes the actor's clipboard to a schematic file; format is inferred from the file extension. */
+    void saveSchematic(Object actor, File file);
+    /** Reads a schematic file into the actor's clipboard; format is inferred from the file extension. */
+    void loadSchematic(Object actor, File file);
+
+    // ---- selection ----
+
+    /**
+     * Axis-aligned bounding box of the actor's current selection. Exact only for a cuboid selection;
+     * other selection shapes (polygon, cylinder, ...) are reported by their bounding box.
+     */
+    Box selection(Object actor);
+}
