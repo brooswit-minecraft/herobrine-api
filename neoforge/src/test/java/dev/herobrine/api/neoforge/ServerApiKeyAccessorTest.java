@@ -2,8 +2,11 @@ package dev.herobrine.api.neoforge;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import com.electronwill.nightconfig.core.CommentedConfig;
+import com.electronwill.nightconfig.toml.TomlParser;
 import dev.herobrine.api.core.Tokens;
 import java.io.IOException;
+import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -15,7 +18,10 @@ import org.junit.jupiter.api.io.TempDir;
 
 /**
  * Exercises the REAL {@link ServerApiKeyAccessor} directly -- not a fake -- against real temp
- * files, covering the full fixture matrix the ticket requires for the dedicated server's key.
+ * files, covering the full fixture matrix the ticket requires for the dedicated server's key,
+ * including the real-TOML-parser regression this class now uses (an earlier regex-based version
+ * broke on hand-edited lines it didn't exactly expect, e.g. a trailing inline comment, by
+ * appending a duplicate {@code apiKey} entry instead of replacing the existing one).
  * <p>
  * {@code ServerApiKeyAccessor}'s {@link ServerApiKeyAccessor#read} and {@link
  * ServerApiKeyAccessor#write} never touch {@code ModConfigSpec.ConfigValue} except for a
@@ -46,14 +52,30 @@ class ServerApiKeyAccessorTest {
         return apiKey;
     }
 
+    /** Reads the {@code apiKey} entry via a real TOML parse -- the same library the accessor
+     * itself uses -- rather than text matching, so this test oracle doesn't share (or mask) any
+     * bug the old regex-based approach could have had. */
     private static String readField(Path f) throws IOException {
-        for (String line : Files.readAllLines(f, StandardCharsets.UTF_8)) {
-            if (line.trim().startsWith("apiKey")) {
-                int i = line.indexOf('"'), j = line.lastIndexOf('"');
-                return i >= 0 && j > i ? line.substring(i + 1, j) : "";
-            }
+        CommentedConfig cfg = parseReal(f);
+        Object raw = cfg.get("apiKey");
+        if (raw == null) throw new IllegalStateException("no apiKey entry in " + f);
+        return (String) raw;
+    }
+
+    private static CommentedConfig parseReal(Path f) throws IOException {
+        try (Reader r = Files.newBufferedReader(f, StandardCharsets.UTF_8)) {
+            return new TomlParser().parse(r);
         }
-        throw new IllegalStateException("no apiKey line in " + f);
+    }
+
+    /** Counts textual occurrences of an {@code apiKey} key=value line, independent of parsing --
+     * this is exactly what would show TWO entries if a regenerate ever appended instead of
+     * replaced (invalid TOML; a real parser would only ever see the LAST one via its map, hiding
+     * the duplication from a parse-based check -- so this has to look at the raw text). */
+    private static long countApiKeyLinesInRawText(Path f) throws IOException {
+        return Files.readAllLines(f, StandardCharsets.UTF_8).stream()
+                .filter(l -> l.trim().startsWith("apiKey") || l.trim().matches("apiKey\\s*=.*"))
+                .count();
     }
 
     @Test void writeToleratesAnUnloadedConfigSpecWithoutFailing() throws IOException {
@@ -188,7 +210,7 @@ class ServerApiKeyAccessorTest {
         }
     }
 
-    @Test void unrelatedEntriesAndCommentsSurviveAWriteByteForByte() throws IOException {
+    @Test void unrelatedEntriesAndCommentsSurviveARegenerate() throws IOException {
         Path f = tmp.resolve("herobrine_api-server.toml");
         List<String> seed = List.of(
                 "#Run the HTTP API on this dedicated server.",
@@ -205,12 +227,15 @@ class ServerApiKeyAccessorTest {
         Tokens t = Tokens.loadOrCreateSingle(accessor);
         t.regenerate(); // a second write, to prove this holds across repeated regenerates too
 
-        List<String> after = Files.readAllLines(f, StandardCharsets.UTF_8);
-        assertEquals(seed.size(), after.size());
-        for (int i = 0; i < seed.size() - 1; i++) { // every line except the apiKey one itself
-            assertEquals(seed.get(i), after.get(i), "line " + i + " must survive byte-for-byte");
-        }
-        assertNotEquals(seed.get(seed.size() - 1), after.get(after.size() - 1));
+        CommentedConfig after = parseReal(f);
+        assertEquals(Boolean.TRUE, after.get("enabled"));
+        assertEquals(25581, (Object) after.<Integer>get("port"));
+        assertEquals(100000, (Object) after.<Integer>get("maxEditVolume"));
+        assertEquals(32768, (Object) after.<Integer>get("maxScanVolume"));
+        // Comments are preserved per-key by the structured round trip (that's the whole point of
+        // CommentedConfig), even though the exact text formatting is the writer's own, not ours.
+        assertTrue(after.getComment("enabled") != null && after.getComment("enabled").contains("HTTP API"));
+        assertTrue(after.getComment("port") != null && after.getComment("port").contains("Loopback"));
         assertTrue(readField(f).length() >= 32);
     }
 
@@ -256,5 +281,82 @@ class ServerApiKeyAccessorTest {
         } finally {
             Files.setPosixFilePermissions(dir, perms);
         }
+    }
+
+    // ---- regression coverage for the regex -> real-TOML-parser fix ----
+
+    @Test void validKeyLineWithATrailingInlineCommentIsReadAsTheExistingKeyNotMissing() throws IOException {
+        Path f = tmp.resolve("herobrine_api-server.toml");
+        String existing = "c".repeat(48);
+        Files.write(f, List.of(
+                "enabled = true",
+                "apiKey = \"" + existing + "\" # rotated manually"), StandardCharsets.UTF_8);
+        ServerApiKeyAccessor accessor = new ServerApiKeyAccessor(freshApiKeyValue(), f);
+
+        assertEquals(existing, accessor.read(),
+                "a trailing inline comment must not make a valid key look missing");
+
+        Tokens t = Tokens.loadOrCreateSingle(accessor);
+        var mtimeBefore = Files.getLastModifiedTime(f);
+        assertEquals(Tokens.Access.FULL, t.authenticate(existing).orElseThrow());
+        assertEquals(mtimeBefore, Files.getLastModifiedTime(f), "a valid, already-correct key must not trigger a rewrite");
+        assertEquals(1, countApiKeyLinesInRawText(f));
+    }
+
+    @Test void regenerateNeverDuplicatesTheApiKeyEntryRegardlessOfOriginalFormatting() throws IOException {
+        Path f = tmp.resolve("herobrine_api-server.toml");
+        // The exact shape that broke the old regex: a trailing inline comment on the apiKey line.
+        Files.write(f, List.of(
+                "enabled = true",
+                "apiKey = \"" + "d".repeat(48) + "\" # rotated manually"), StandardCharsets.UTF_8);
+        ServerApiKeyAccessor accessor = new ServerApiKeyAccessor(freshApiKeyValue(), f);
+        Tokens t = Tokens.loadOrCreateSingle(accessor);
+
+        t.regenerate(); // forces a real rewrite regardless of the original value's validity
+
+        assertEquals(1, countApiKeyLinesInRawText(f), "a regenerate must replace the existing entry, never append a second one");
+        // And the file must still be valid, re-parseable TOML with exactly one apiKey key.
+        CommentedConfig after = parseReal(f);
+        assertNotNull(after.get("apiKey"));
+        assertTrue(readField(f).length() >= 32);
+    }
+
+    @Test void roundTripsReorderedKeysBlankLinesAndAPrecedingComment() throws IOException {
+        Path f = tmp.resolve("herobrine_api-server.toml");
+        // Deliberately out of the order ServerConfig itself would write, with blank lines and a
+        // comment directly above the apiKey line -- all plausible hand-edits.
+        Files.write(f, List.of(
+                "maxScanVolume = 32768",
+                "",
+                "port = 25581",
+                "enabled = true",
+                "",
+                "# manually rotated below",
+                "apiKey = \"" + "e".repeat(48) + "\""), StandardCharsets.UTF_8);
+        ServerApiKeyAccessor accessor = new ServerApiKeyAccessor(freshApiKeyValue(), f);
+
+        assertEquals("e".repeat(48), accessor.read());
+
+        Tokens t = Tokens.loadOrCreateSingle(accessor);
+        t.regenerate();
+
+        CommentedConfig after = parseReal(f);
+        assertEquals(32768, (Object) after.<Integer>get("maxScanVolume"));
+        assertEquals(25581, (Object) after.<Integer>get("port"));
+        assertEquals(Boolean.TRUE, after.get("enabled"));
+        assertEquals(1, countApiKeyLinesInRawText(f));
+        assertTrue(readField(f).length() >= 32);
+    }
+
+    @Test void malformedTomlFailsClosedWithoutCorruptingAnything() throws IOException {
+        Path f = tmp.resolve("herobrine_api-server.toml");
+        String malformed = "enabled = true\napiKey = \"unterminated-string\n"; // missing closing quote
+        Files.writeString(f, malformed, StandardCharsets.UTF_8);
+        ServerApiKeyAccessor accessor = new ServerApiKeyAccessor(freshApiKeyValue(), f);
+
+        assertThrows(IOException.class, accessor::read, "genuinely malformed TOML must fail closed, not guess");
+        assertThrows(IOException.class, () -> Tokens.loadOrCreateSingle(accessor));
+
+        assertEquals(malformed, Files.readString(f, StandardCharsets.UTF_8), "a failed parse must never touch the file");
     }
 }
