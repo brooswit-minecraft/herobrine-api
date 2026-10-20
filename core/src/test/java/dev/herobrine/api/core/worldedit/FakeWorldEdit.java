@@ -37,15 +37,49 @@ public final class FakeWorldEdit {
 
     public static void reset() { INSTANCE = new FakeWorldEdit(); }
 
-    public Pattern parsePattern(String input) throws InputParseException {
+    /** Every ParserContext the adapter handed a parser, in order. */
+    public final List<com.sk89q.worldedit.extension.input.ParserContext> parserContexts = new ArrayList<>();
+
+    /**
+     * Mirrors what the real pattern parsers read from their context: {@code #clipboard} / {@code #copy} (with an
+     * optional {@code @[x,y,z]} offset) take the context session's clipboard - {@code ClipboardPatternParser}
+     * calls {@code context.requireSession()} - and a block pattern under the default restricted context needs
+     * the actor for WorldEdit's disallowed-blocks check ({@code DefaultBlockParser}).
+     */
+    public Pattern parsePattern(String input, com.sk89q.worldedit.extension.input.ParserContext context) throws InputParseException {
+        parserContexts.add(context);
         if ("bad-pattern".equals(input)) throw new InputParseException("Unknown pattern: " + input);
         calls.add("parsePattern:" + input);
+        String head = input.split("@", 2)[0];
+        if (head.equalsIgnoreCase("#clipboard") || head.equalsIgnoreCase("#copy")) {
+            try {
+                return new NamedPattern(input + "=" + context.requireSession().getClipboard().getClipboard());
+            } catch (com.sk89q.worldedit.EmptyClipboardException e) {
+                throw new InputParseException("Your clipboard is empty.");
+            }
+        }
+        if (context.isRestricted()) context.requireActor();
         return new NamedPattern(input);
     }
 
-    public Mask parseMask(String input) throws InputParseException {
+    /**
+     * Mirrors what the real mask parsers read from their context: {@code #region} / {@code #selection} /
+     * {@code #sel} take the context session's selection in the context world - {@code RegionMaskParser} calls
+     * {@code context.requireSession().getSelection(context.requireWorld())} - and every other mask tests blocks
+     * against the context's extent ({@code BlocksMaskParser}, {@code ExistingMaskParser}: {@code requireExtent()}).
+     */
+    public Mask parseMask(String input, com.sk89q.worldedit.extension.input.ParserContext context) throws InputParseException {
+        parserContexts.add(context);
         if ("bad-mask".equals(input)) throw new InputParseException("Unknown mask: " + input);
         calls.add("parseMask:" + input);
+        if (List.of("#region", "#selection", "#sel").contains(input)) {
+            try {
+                return new NamedMask(input + "=" + context.requireSession().getSelection(context.requireWorld()));
+            } catch (com.sk89q.worldedit.IncompleteRegionException e) {
+                throw new InputParseException("Make a region selection first.");
+            }
+        }
+        context.requireExtent();
         return new NamedMask(input);
     }
 

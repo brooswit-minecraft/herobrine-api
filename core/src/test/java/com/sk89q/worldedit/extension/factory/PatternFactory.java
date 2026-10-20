@@ -6,6 +6,6 @@ import dev.herobrine.api.core.worldedit.FakeWorldEdit;
 
 public final class PatternFactory {
     public Pattern parseFromInput(String input, ParserContext context) throws InputParseException {
-        return FakeWorldEdit.INSTANCE.parsePattern(input);
+        return FakeWorldEdit.INSTANCE.parsePattern(input, context);
     }
 }

@@ -6,6 +6,6 @@ import dev.herobrine.api.core.worldedit.FakeWorldEdit;
 
 public final class MaskFactory {
     public Mask parseFromInput(String input, ParserContext context) throws InputParseException {
-        return FakeWorldEdit.INSTANCE.parseMask(input);
+        return FakeWorldEdit.INSTANCE.parseMask(input, context);
     }
 }

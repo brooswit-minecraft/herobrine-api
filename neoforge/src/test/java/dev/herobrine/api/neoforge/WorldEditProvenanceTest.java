@@ -111,8 +111,14 @@ class WorldEditProvenanceTest {
         method("EditSession", "close", void.class);
         method("extension.factory.PatternFactory", "parseFromInput", Object.class, String.class, "extension.input.ParserContext");
         method("extension.factory.MaskFactory", "parseFromInput", Object.class, String.class, "extension.input.ParserContext");
+        // The ParserContext the adapter builds for every pattern and mask, as FactoryConverter.createContext does.
         constructor("extension.input.ParserContext");
         method("extension.input.ParserContext", "setActor", void.class, "extension.platform.Actor");
+        method("extension.input.ParserContext", "setWorld", void.class, "world.World");
+        method("extension.input.ParserContext", "setExtent", void.class, "extent.Extent");
+        method("extension.input.ParserContext", "setSession", void.class, "LocalSession");
+        method("extension.input.ParserContext", "setRestricted", void.class, boolean.class);
+        isA("EditSession", "extent.Extent"); // the operation's EditSession is the context's extent
         method("MaxChangedBlocksException", "getBlockLimit", int.class);
         // The checked exceptions the adapter translates into 400s, identified by these exact names.
         for (String e : List.of("IncompleteRegionException", "EmptyClipboardException", "MaxChangedBlocksException",

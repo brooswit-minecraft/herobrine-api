@@ -39,10 +39,11 @@ dependencies {
     implementation project(':core')
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
-    // The real WorldEdit 7.3.8 for NeoForge, on the test runtime classpath only: WorldEditProvenanceTest
-    // resolves every WorldEdit class, method, constructor and field the adapter reaches by reflection against
-    // it. The mod itself never compiles against or bundles WorldEdit; it stays an optional runtime mod.
-    testRuntimeOnly 'com.sk89q.worldedit:worldedit-neoforge-mc1.21:7.3.8'
+    // The real WorldEdit 7.3.8 for NeoForge, for tests only: WorldEditProvenanceTest resolves every WorldEdit
+    // class, method, constructor and field the adapter reaches by reflection against it, and
+    // WorldEditParserContextTest runs WorldEdit's own pattern/mask parsers on the adapter's ParserContext. The
+    // mod itself never compiles against or bundles WorldEdit; it stays an optional runtime mod.
+    testImplementation 'com.sk89q.worldedit:worldedit-neoforge-mc1.21:7.3.8'
 }
 
 // ApiController (like the rest of main) touches Mojang/NeoForge logging classes that only live on

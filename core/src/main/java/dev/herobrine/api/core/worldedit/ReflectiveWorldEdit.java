@@ -169,12 +169,19 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
      * else the actor's own world as a {@code Locatable}.
      */
     private Object editingWorld(Object session, Object actor) {
+        Object world = worldOf(session, actor);
+        if (world == null) throw ApiException.badRequest("The actor is not in a world WorldEdit can edit");
+        return world;
+    }
+
+    /** {@link #editingWorld}, or null when the actor has none. */
+    private Object worldOf(Object session, Object actor) {
         if ((Boolean) invoke(session, "hasWorldOverride")) return invoke(session, "getWorldOverride");
         if (load(LOCATABLE).isInstance(actor)) {
             Object extent = invoke(actor, "getExtent");
             if (load(WORLD_CLASS).isInstance(extent)) return extent;
         }
-        throw ApiException.badRequest("The actor is not in a world WorldEdit can edit");
+        return null;
     }
 
     /**
@@ -218,10 +225,10 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
      *  takes the {@code Region} interface, so any real region implementation works identically here). */
     private int setBlocksOnRegion(Object actor, Object region, String pattern) {
         Object we = worldEdit();
-        Object patternObj = parsePattern(we, actor, pattern);
         Object session = session(we, actor);
         Object editSession = newEditSession(session, actor);
         try {
+            Object patternObj = parsePattern(we, parserContext(session, actor, editSession), pattern);
             return (Integer) limited(() -> invoke(editSession, "setBlocks", region, patternObj));
         } finally {
             rememberAndClose(session, editSession);
@@ -231,11 +238,12 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
     /** Shared by every region shape's {@code replaceBlocks} overload. */
     private int replaceBlocksOnRegion(Object actor, Object region, String mask, String pattern) {
         Object we = worldEdit();
-        Object maskObj = parseMask(we, actor, mask);
-        Object patternObj = parsePattern(we, actor, pattern);
         Object session = session(we, actor);
         Object editSession = newEditSession(session, actor);
         try {
+            // A fresh context per argument, as FactoryConverter creates one per converted argument.
+            Object maskObj = parseMask(we, parserContext(session, actor, editSession), mask);
+            Object patternObj = parsePattern(we, parserContext(session, actor, editSession), pattern);
             return (Integer) limited(() -> invoke(editSession, "replaceBlocks", region, maskObj, patternObj));
         } finally {
             rememberAndClose(session, editSession);
@@ -610,11 +618,11 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
     @Override public int makeSphere(Object actor, int x, int y, int z, double radiusX, double radiusY, double radiusZ, boolean filled, String pattern) {
         Object we = worldEdit();
         checkMaxRadius(we, radiusX, radiusY, radiusZ);
-        Object patternObj = parsePattern(we, actor, pattern);
         Object pos = blockVector3(x, y, z);
         Object session = session(we, actor);
         Object editSession = newEditSession(session, actor);
         try {
+            Object patternObj = parsePattern(we, parserContext(session, actor, editSession), pattern);
             return (Integer) limited(() -> invoke(editSession, "makeSphere", pos, patternObj, radiusX, radiusY, radiusZ, filled));
         } finally {
             rememberAndClose(session, editSession);
@@ -625,11 +633,11 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
     @Override public int makeCylinder(Object actor, int x, int y, int z, double radiusX, double radiusZ, int height, boolean filled, String pattern) {
         Object we = worldEdit();
         checkMaxRadius(we, radiusX, radiusZ, height);
-        Object patternObj = parsePattern(we, actor, pattern);
         Object pos = blockVector3(x, y, z);
         Object session = session(we, actor);
         Object editSession = newEditSession(session, actor);
         try {
+            Object patternObj = parsePattern(we, parserContext(session, actor, editSession), pattern);
             return (Integer) limited(() -> invoke(editSession, "makeCylinder", pos, patternObj, radiusX, radiusZ, height, filled));
         } finally {
             rememberAndClose(session, editSession);
@@ -640,11 +648,11 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
     @Override public int makePyramid(Object actor, int x, int y, int z, int size, boolean filled, String pattern) {
         Object we = worldEdit();
         checkMaxRadius(we, size);
-        Object patternObj = parsePattern(we, actor, pattern);
         Object pos = blockVector3(x, y, z);
         Object session = session(we, actor);
         Object editSession = newEditSession(session, actor);
         try {
+            Object patternObj = parsePattern(we, parserContext(session, actor, editSession), pattern);
             return (Integer) limited(() -> invoke(editSession, "makePyramid", pos, patternObj, size, filled));
         } finally {
             rememberAndClose(session, editSession);
@@ -739,23 +747,51 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
         return invokeStatic(load(BLOCK_VECTOR3), "at", x, y, z);
     }
 
-    private Object parsePattern(Object we, Object actor, String pattern) {
-        Object parserContext = parserContext(actor);
-        Object factory = invoke(we, "getPatternFactory");
-        return invokeTranslating(factory, "parseFromInput", INPUT_PARSE_EXCEPTION,
-                "Invalid pattern: " + pattern, pattern, parserContext);
+    private Object parsePattern(Object we, Object parserContext, String pattern) {
+        return parse(invoke(we, "getPatternFactory"), "pattern", pattern, parserContext);
     }
 
-    private Object parseMask(Object we, Object actor, String mask) {
-        Object parserContext = parserContext(actor);
-        Object factory = invoke(we, "getMaskFactory");
-        return invokeTranslating(factory, "parseFromInput", INPUT_PARSE_EXCEPTION,
-                "Invalid mask: " + mask, mask, parserContext);
+    private Object parseMask(Object we, Object parserContext, String mask) {
+        return parse(invoke(we, "getMaskFactory"), "mask", mask, parserContext);
     }
 
-    private Object parserContext(Object actor) {
+    /** {@code AbstractFactory.parseFromInput}; a parser's {@code InputParseException} is a 400 carrying its message. */
+    private Object parse(Object factory, String what, String input, Object parserContext) {
+        try {
+            return invoke(factory, "parseFromInput", input, parserContext);
+        } catch (ApiException e) {
+            if (!causedBy(e, INPUT_PARSE_EXCEPTION)) throw e;
+            throw ApiException.badRequest("Invalid " + what + " '" + input + "': " + e.getCause().getMessage());
+        }
+    }
+
+    /**
+     * The {@code ParserContext} for one operation's pattern or mask, built as WorldEdit's own pattern/mask argument
+     * converter builds one ({@code FactoryConverter.createContext}, FactoryConverter.java:99-123):
+     * <ul>
+     * <li>the actor, with restricted input ({@code setRestricted(true)}), so WorldEdit's disallowed-blocks rule
+     *     still holds for an actor without {@code worldedit.anyblock} (DefaultBlockParser.java:423-429);</li>
+     * <li>the actor's own {@code LocalSession} - the one this operation edits through - which {@code #clipboard}
+     *     and {@code #copy} ({@code ClipboardPatternParser}) and {@code #region}, {@code #selection} and
+     *     {@code #sel} ({@code RegionMaskParser}) read, so one actor's clipboard or selection is never another's;</li>
+     * <li>the world, {@link #editingWorld}: the session's world override first, the world this operation edits
+     *     and the selection reporters read. {@code FactoryConverter} prefers a player's own world to the override,
+     *     so there {@code #region} can resolve a different world's selection than the one the command edits
+     *     (its injected {@code World} is override-first); using one world for both keeps them the same;</li>
+     * <li>the extent masks test blocks against: this operation's own {@code EditSession}. That is what
+     *     {@code FactoryConverter}'s {@code RequestExtent} resolves to through WorldEdit's thread-local command
+     *     request, which this API never opens, so it is passed directly - after {@code setWorld}, which resets
+     *     the extent to the bare world (ParserContext.setWorld).</li>
+     * </ul>
+     */
+    Object parserContext(Object session, Object actor, Object editSession) {
         Object ctx = create(PARSER_CONTEXT);
         invoke(ctx, "setActor", actor);
+        Object world = worldOf(session, actor);
+        if (world != null) invoke(ctx, "setWorld", world);
+        invoke(ctx, "setExtent", editSession);
+        invoke(ctx, "setSession", session);
+        invoke(ctx, "setRestricted", true);
         return ctx;
     }
 

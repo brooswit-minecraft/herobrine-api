@@ -230,6 +230,25 @@ class WorldEditBindingTest {
         assertEquals(400, exec(base, full, "worldedit.load_schematic", "{\"file\":\"../house.schem\",\"player\":\"bob\"}").statusCode());
     }
 
+    @Test void clipboardPatternsAndSelectionMasksReadOnlyThePlayersOwnSession() throws Exception {
+        String elsewhere = "\"x1\":10,\"y1\":64,\"z1\":10,\"x2\":11,\"y2\":65,\"z2\":11";
+        assertEquals(200, exec(base, full, "worldedit.copy", "{" + BOX + ",\"player\":\"alex\"}").statusCode());
+        var alexStamp = exec(base, full, "worldedit.set_blocks", "{" + elsewhere + ",\"pattern\":\"#clipboard\",\"player\":\"alex\"}");
+        assertEquals(200, alexStamp.statusCode(), alexStamp.body());
+        var bobStamp = exec(base, full, "worldedit.set_blocks", "{" + elsewhere + ",\"pattern\":\"#clipboard\",\"player\":\"bob\"}");
+        assertEquals(400, bobStamp.statusCode(), "bob has no clipboard; alex's must not be used");
+
+        LocalSession alex = session("alex");
+        alex.selectionWorld = new FakeWorld("overworld");
+        alex.selectionRegion = new com.sk89q.worldedit.regions.CuboidRegion(
+                com.sk89q.worldedit.math.BlockVector3.at(0, 64, 0), com.sk89q.worldedit.math.BlockVector3.at(1, 65, 1));
+        String replace = "{" + BOX + ",\"mask\":\"#region\",\"pattern\":\"stone\",\"player\":\"%s\"}";
+        var alexReplace = exec(base, full, "worldedit.replace_blocks", replace.formatted("alex"));
+        assertEquals(200, alexReplace.statusCode(), alexReplace.body());
+        assertEquals(400, exec(base, full, "worldedit.replace_blocks", replace.formatted("bob")).statusCode(),
+                "bob has no selection; alex's must not be used");
+    }
+
     // ---- WorldEdit absent ----
 
     @Test void withoutWorldEditEverythingStaysDiscoverableButUnavailable() throws Exception {

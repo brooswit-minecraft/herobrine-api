@@ -72,8 +72,9 @@ class ReflectiveWorldEditTest {
         Box box = new Box(5, 10, 5, 3, 8, 7); // min (3,8,5), max (5,10,7)
         int changed = a.setBlocks(actor, box, "stone");
         assertEquals(7, changed);
+        // The pattern is parsed after the edit session opens: masks test blocks against it (see parserContext).
         assertEquals(
-                java.util.List.of("parsePattern:stone", "createEditSession:" + actor + ":maxBlocks=-1",
+                java.util.List.of("createEditSession:" + actor + ":maxBlocks=-1", "parsePattern:stone",
                         "setBlocks:CuboidRegion(BV3(3,8,5),BV3(5,10,7)):stone", "close"),
                 FakeWorldEdit.INSTANCE.calls);
         assertEquals(1, session().history.size());
@@ -110,6 +111,9 @@ class ReflectiveWorldEditTest {
         assertEquals("BAD_REQUEST", e1.code);
         ApiException e2 = assertThrows(ApiException.class, () -> a.replaceBlocks(actor, box, "bad-mask", "stone"));
         assertEquals("BAD_REQUEST", e2.code);
+        assertTrue(e2.getMessage().contains("Unknown mask: bad-mask"), e2.getMessage()); // WorldEdit's own reason
+        assertTrue(session().history.isEmpty()); // nothing was edited...
+        assertEquals(2, FakeWorldEdit.INSTANCE.calls.stream().filter("close"::equals).count()); // ...and both sessions closed
     }
 
     @Test void editSessionIsAlwaysClosedEvenWhenTheEditIsRejected() {
@@ -589,5 +593,55 @@ class ReflectiveWorldEditTest {
         ApiException e = assertThrows(ApiException.class, () -> a.setBlocks(actor, new Box(0, 0, 0, 1, 1, 1), "stone"));
         assertEquals(409, e.status);
         assertEquals("ACTION_UNAVAILABLE", e.code);
+    }
+
+    // ---- the ParserContext a pattern or mask is parsed with (#clipboard, #region, block masks) ----
+
+    @Test void patternsAndMasksAreParsedWithTheActorsSessionWorldAndEditSession() {
+        a.replaceBlocks(actor, new Box(0, 0, 0, 1, 1, 1), "dirt", "stone");
+        var contexts = FakeWorldEdit.INSTANCE.parserContexts;
+        assertEquals(2, contexts.size()); // one per argument, as WorldEdit's FactoryConverter creates them
+        assertNotSame(contexts.get(0), contexts.get(1));
+        for (var ctx : contexts) {
+            assertSame(actor, ctx.getActor());
+            assertSame(session(), ctx.getSession());
+            assertEquals(actor.world, ctx.getWorld());
+            assertSame(session().history.get(0), ctx.getExtent(), "masks test blocks against the operation's own EditSession");
+            assertTrue(ctx.isRestricted());
+        }
+    }
+
+    @Test void aClipboardPatternUsesTheActorsOwnClipboard() {
+        a.copy(actor, new Box(0, 0, 0, 1, 1, 1));
+        assertEquals(7, a.setBlocks(actor, new Box(10, 0, 10, 11, 1, 11), "#clipboard"));
+        assertEquals(11, a.makeSphere(actor, 20, 64, 20, 2, 2, 2, true, "#copy@[1,0,1]"));
+        assertTrue(FakeWorldEdit.INSTANCE.calls.stream().anyMatch(c -> c.startsWith("setBlocks:")
+                && c.endsWith(":#clipboard=Clipboard(CuboidRegion(BV3(0,0,0),BV3(1,1,1)),origin=BV3(0,0,0))")), FakeWorldEdit.INSTANCE.calls.toString());
+
+        FakeActor alex = new FakeActor("alex"); // has no clipboard of their own; steve's is never used
+        ApiException e = assertThrows(ApiException.class, () -> a.setBlocks(alex, new Box(10, 0, 10, 11, 1, 11), "#clipboard"));
+        assertEquals("BAD_REQUEST", e.code);
+        assertTrue(e.getMessage().contains("clipboard is empty"), e.getMessage());
+    }
+
+    @Test void aSelectionMaskUsesTheActorsOwnSelectionInTheWorldBeingEdited() {
+        Box everything = new Box(0, 0, 0, 9, 9, 9);
+        session().selectionWorld = actor.world;
+        session().selectionRegion = new com.sk89q.worldedit.regions.CuboidRegion(BlockVector3.at(1, 2, 3), BlockVector3.at(4, 5, 6));
+        assertEquals(3, a.replaceBlocks(actor, everything, "#region", "stone"));
+        assertTrue(FakeWorldEdit.INSTANCE.calls.stream().anyMatch(c -> c.startsWith("replaceBlocks:")
+                && c.endsWith(":#region=CuboidRegion(BV3(1,2,3),BV3(4,5,6)):stone")), FakeWorldEdit.INSTANCE.calls.toString());
+
+        FakeActor alex = new FakeActor("alex"); // alex's own (missing) selection, never steve's
+        assertEquals("BAD_REQUEST", assertThrows(ApiException.class, () -> a.replaceBlocks(alex, everything, "#selection", "stone")).code);
+
+        actor.world = new FakeWorld("the_nether"); // the selection was made in the overworld
+        ApiException elsewhere = assertThrows(ApiException.class, () -> a.replaceBlocks(actor, everything, "#sel", "stone"));
+        assertTrue(elsewhere.getMessage().contains("Make a region selection first"), elsewhere.getMessage());
+
+        session().worldOverride = new FakeWorld("overworld"); // like //world overworld: the edit, and #sel, use it
+        assertEquals(3, a.replaceBlocks(actor, everything, "#sel", "stone"));
+        var ctx = FakeWorldEdit.INSTANCE.parserContexts.get(FakeWorldEdit.INSTANCE.parserContexts.size() - 2); // the mask's
+        assertEquals(new FakeWorld("overworld"), ctx.getWorld());
     }
 }
