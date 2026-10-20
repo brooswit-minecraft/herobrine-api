@@ -108,13 +108,26 @@ final class ServerApiKeyAccessor implements Tokens.SecretAccessor {
     @Override
     public Path lockAnchor() { return configFilePath; }
 
-    /** Parses {@code path} as TOML, failing closed (a clear, path-only, non-secret-leaking
-     * message) rather than guessing anything about malformed content. */
+    /**
+     * Parses {@code path} as TOML, failing closed (a clear, path-only, non-secret-leaking
+     * message) rather than guessing anything about malformed content.
+     * <p>
+     * Deliberately does NOT attach the caught {@link ParsingException} as this exception's cause.
+     * NightConfig's parser exceptions commonly echo a snippet of the actual offending input text
+     * in their own {@code getMessage()} for context (e.g. "unexpected character near: ...") -- if
+     * the malformed input happens to be a corrupted {@code apiKey} line, that snippet could be
+     * part of the real secret. A logger that prints a caught exception (e.g. SLF4J's {@code
+     * LOG.error(msg, throwable)}) walks the ENTIRE cause chain, not just the top-level message, so
+     * attaching it as a cause would leak the secret into the log the moment anything upstream logs
+     * this exception -- exactly the path {@code Tokens.authenticate()} -> this method is on for
+     * every single request. No cause is kept at all; the path-only message above is the only
+     * diagnostic information this exception (or anything that logs it) ever carries.
+     */
     private static CommentedConfig parse(Path path) throws IOException {
         try (Reader r = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
             return new TomlParser().parse(r);
         } catch (ParsingException e) {
-            throw new IOException("the dedicated server's config file is not valid TOML: " + path, e);
+            throw new IOException("the dedicated server's config file is not valid TOML: " + path);
         }
     }
 }

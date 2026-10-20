@@ -359,4 +359,50 @@ class ServerApiKeyAccessorTest {
 
         assertEquals(malformed, Files.readString(f, StandardCharsets.UTF_8), "a failed parse must never touch the file");
     }
+
+    @Test void parseFailureNeverLeaksFileContentThroughAnyPartOfTheThrowableChain() throws IOException {
+        Path f = tmp.resolve("herobrine_api-server.toml");
+        ServerApiKeyAccessor accessor = new ServerApiKeyAccessor(freshApiKeyValue(), f);
+        Tokens t = Tokens.loadOrCreateSingle(accessor); // succeeds first: a valid file
+
+        // An inert, obviously-fake marker -- never a real generated key -- placed exactly where a
+        // real parser's error-context snippet would most likely echo it back: as the content of
+        // the unterminated string value itself, right at the syntax error.
+        String marker = "FAKE-SECRET-MARKER-ABCDEF0123456789-DO-NOT-LEAK";
+        String malformed = "enabled = true\napiKey = \"" + marker; // missing closing quote
+        Files.writeString(f, malformed, StandardCharsets.UTF_8);
+
+        // Path 1: the direct read() call.
+        IOException direct = assertThrows(IOException.class, accessor::read);
+        assertNoLeakAnywhereInTheThrowableChain(marker, direct);
+
+        // Path 2: the real end-to-end path a server actually hits on every request --
+        // authenticate() -> refresh() -> ensureCurrent()/read() -> parse() -- wrapped into
+        // TokensUnavailableException, which is exactly what something like
+        // LOG.error("...", throwable) would render in full, cause chain included.
+        Tokens.TokensUnavailableException viaAuthenticate = assertThrows(Tokens.TokensUnavailableException.class,
+                () -> t.authenticate("whatever"));
+        assertNoLeakAnywhereInTheThrowableChain(marker, viaAuthenticate);
+    }
+
+    /** Checks {@code getMessage()} on {@code root} and on every cause and suppressed exception,
+     * recursively, AND the complete rendered stack trace text (what a real logger like SLF4J
+     * effectively prints via {@code LOG.error(msg, throwable)}) -- not just the top-level
+     * message, which is exactly what the reviewed finding says was insufficient. */
+    private static void assertNoLeakAnywhereInTheThrowableChain(String marker, Throwable root) {
+        Throwable current = root;
+        int guard = 0;
+        while (current != null && guard++ < 50) {
+            assertFalse(String.valueOf(current.getMessage()).contains(marker),
+                    "leaked via getMessage() of " + current.getClass().getName());
+            for (Throwable suppressed : current.getSuppressed()) {
+                assertFalse(String.valueOf(suppressed.getMessage()).contains(marker),
+                        "leaked via a suppressed exception's message");
+            }
+            current = current.getCause();
+        }
+        java.io.StringWriter sw = new java.io.StringWriter();
+        root.printStackTrace(new java.io.PrintWriter(sw));
+        assertFalse(sw.toString().contains(marker), "leaked via the fully rendered stack trace text");
+    }
 }
