@@ -52,6 +52,22 @@ class ReflectiveWorldEditTest {
         assertTrue(e.getMessage().contains("7.2.0"));
     }
 
+    @Test void anUnverifiedSiblingReleaseIsAlsoUnsupportedNotJustADifferentBranch() {
+        // A prior draft accepted any 7.3.x via startsWith("7.3."), which would wrongly let an unverified
+        // 7.3.9 (or 7.3.80, etc.) run reflective calls instead of failing fast. Only 7.3.8 itself - and its
+        // own build-metadata suffix - is verified.
+        FakeWorldEdit.INSTANCE.version = "7.3.9";
+        ApiException e = assertThrows(ApiException.class, () -> a.setBlocks(actor, new Box(0, 0, 0, 1, 1, 1), "stone"));
+        assertEquals("UNSUPPORTED", e.code);
+
+        FakeWorldEdit.INSTANCE.version = "7.3.80";
+        ApiException e2 = assertThrows(ApiException.class, () -> a.setBlocks(actor, new Box(0, 0, 0, 1, 1, 1), "stone"));
+        assertEquals("UNSUPPORTED", e2.code);
+
+        FakeWorldEdit.INSTANCE.version = "7.3.8"; // exact, no build metadata - still accepted
+        assertEquals(7, a.setBlocks(actor, new Box(0, 0, 0, 1, 1, 1), "stone"));
+    }
+
     @Test void setBlocksBuildsRegionAndPatternAndRemembersForUndo() {
         Box box = new Box(5, 10, 5, 3, 8, 7); // min (3,8,5), max (5,10,7)
         int changed = a.setBlocks(actor, box, "stone");

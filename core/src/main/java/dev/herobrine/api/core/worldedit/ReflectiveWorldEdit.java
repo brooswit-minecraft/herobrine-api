@@ -42,8 +42,9 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
     private static final String MAX_CHANGED_BLOCKS_EXCEPTION = "com.sk89q.worldedit.MaxChangedBlocksException";
     private static final String INPUT_PARSE_EXCEPTION = "com.sk89q.worldedit.extension.input.InputParseException";
 
-    /** The WorldEdit version branch this adapter was verified against (see class Javadoc). */
-    private static final String SUPPORTED_VERSION_PREFIX = "7.3.";
+    /** The exact WorldEdit release this adapter was verified against (see class Javadoc) - not a branch:
+     *  every signature here was checked against 7.3.8 specifically, not against 7.3.9+ or any other 7.3.x. */
+    private static final String SUPPORTED_VERSION = "7.3.8";
 
     private final ClassLoader loader;
 
@@ -64,16 +65,27 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
         return v == null ? null : v.toString();
     }
 
-    /** @return the WorldEdit instance, after checking the installed build is a verified-compatible version. */
+    /** @return the WorldEdit instance, after checking the installed build is the verified-compatible version. */
     private Object worldEdit() {
         if (!installed()) throw ApiException.unavailable("WorldEdit is not installed");
         String v = version();
-        if (v == null || !v.startsWith(SUPPORTED_VERSION_PREFIX)) {
+        if (!isSupportedVersion(v)) {
             throw new ApiException(501, "UNSUPPORTED",
-                    "Installed WorldEdit " + v + " is not in the verified " + SUPPORTED_VERSION_PREFIX
-                            + "x branch (worldedit-neoforge-mc1.21, NeoForge/Minecraft 1.21.1)");
+                    "Installed WorldEdit " + v + " is not the verified " + SUPPORTED_VERSION
+                            + " (worldedit-neoforge-mc1.21, NeoForge/Minecraft 1.21.1) - every other 7.3.x "
+                            + "release, verified or not, is also rejected");
         }
         return invokeStatic(load(WORLDEDIT), "getInstance");
+    }
+
+    /**
+     * Exact match on {@link #SUPPORTED_VERSION}, allowing WorldEdit's own build-metadata suffix (e.g.
+     * {@code "7.3.8+1379-7d32b45"}, verified: {@code WorldEdit.getVersion()} returns the Gradle-generated
+     * version string with a {@code +build-hash} suffix). {@code startsWith("7.3.")} - the first draft of
+     * this check - would also accept 7.3.9, 7.3.80, or any other 7.3.x release that was never verified.
+     */
+    private static boolean isSupportedVersion(String v) {
+        return v != null && (v.equals(SUPPORTED_VERSION) || v.startsWith(SUPPORTED_VERSION + "+"));
     }
 
     private Object session(Object we, Object actor) {

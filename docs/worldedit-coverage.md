@@ -20,9 +20,12 @@ Minecraft player - that is MINECRAFT-476 ("Implement direct WorldEdit API bindin
   pin - it is the newest WorldEdit build that actually supports this repo's exact Minecraft/NeoForge version.
   A future bump of this repo's NeoForge version past 1.21.1 should re-run this check rather than assume the
   next WorldEdit release still applies.
-- `ReflectiveWorldEdit` enforces this at runtime: `WorldEdit.getVersion()` must start with `"7.3."`, or every
-  adapter call fails fast with `501 UNSUPPORTED` naming the installed version, instead of silently
-  attempting calls against an unverified build.
+- `ReflectiveWorldEdit` enforces this at runtime: `WorldEdit.getVersion()` must equal `"7.3.8"` exactly, or
+  match it with WorldEdit's own build-metadata suffix (e.g. `"7.3.8+1379-7d32b45"`, verified:
+  `WorldEdit.getVersion()` reads this from `WorldEditManifest`), or every adapter call fails fast with
+  `501 UNSUPPORTED` naming the installed version. An earlier draft matched any `"7.3."`-prefixed version,
+  which would have silently accepted an unverified `7.3.9` (or `7.3.80`, etc.) instead of rejecting it - only
+  the one release actually verified here is accepted.
 
 ## Coverage matrix (`WorldEditAdapter` / `ReflectiveWorldEdit`)
 
