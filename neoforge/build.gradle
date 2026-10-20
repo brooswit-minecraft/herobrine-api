@@ -17,15 +17,36 @@ neoForge {
     version = '21.1.172'
     runs {
         client { client() }
+        server { server() }
     }
     mods {
-        herobrine_api { sourceSet sourceSets.main }
+        // Dev runs (runClient/runServer) load each mod from its own classloader, keyed off these
+        // sourceSets; without core's, GameThread/ApiServer/etc. are NoClassDefFoundError at runtime
+        // there even though the built jar already bundles them (see the jar{} block below).
+        herobrine_api {
+            sourceSet sourceSets.main
+            sourceSet project(':core').sourceSets.main
+        }
     }
 }
 
 dependencies {
     implementation project(':core')
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
 }
+
+// ApiController (like the rest of main) touches Mojang/NeoForge logging classes that only live on
+// the modded game's compile/runtime classpath, not on the plain JUnit classpath the 'java' plugin
+// gives the 'test' source set by default -- so tests see it too.
+sourceSets {
+    test {
+        compileClasspath += sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.runtimeClasspath
+    }
+}
+
+test { useJUnitPlatform() }
 
 // Bundle core classes into the mod jar (Gson is provided by Minecraft at runtime).
 jar {

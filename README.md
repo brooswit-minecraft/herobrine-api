@@ -5,8 +5,9 @@ The design goal is **as close to 1-to-1 with the game as possible**: reads retur
 now, actions do the thing and return what it returned. The API keeps no operation, queue, lock or session state.
 
 - `core/` — platform-independent server, registries, Baritone adapter. `./gradlew :core:test`
-- `neoforge/` — Minecraft bindings (opt-in: `./gradlew -PwithNeoForge :neoforge:build`; compiles in CI against NeoForge 21.1.172 but **has never been run in a real client**)
+- `neoforge/` — Minecraft bindings (opt-in: `./gradlew -PwithNeoForge :neoforge:build`; compiles in CI against NeoForge 21.1.172 but **has never been run in a real client**). Loads on both the client and a dedicated server; see `docs/SERVER.md` for the dedicated-server side.
 - `docs/COVERAGE.md` — what is implemented vs. the spec
+- `docs/SERVER.md` — dedicated-server usage, config and key, and how it differs from the client
 
 ## CI
 `.github/workflows/ci.yml` runs the `core` tests and the NeoForge build on every PR and push to `main`. Publishing a GitHub release
@@ -21,6 +22,14 @@ The API is **on by default** and listens on `127.0.0.1:25580` (`port` in `config
 
 In-game: `/herobrine_api on|off|status|regenerate`. `off` stops the server and releases any keys it was holding
 (the tokens stay); `regenerate` replaces both tokens immediately.
+
+If either token file ever goes missing, gets deleted, or ends up empty/whitespace-only, the *next* time it is
+read (the next request, or the next `/herobrine_api on`) a fresh one is generated and saved automatically --
+no restart needed. A normal, valid token is never rewritten just by being read. The full and read-only tokens
+are always independent: regenerating one on-the-fly never touches the other.
+
+Running on a dedicated server is also supported, with its own independent lifecycle, config and key (one
+simple operator key, not a full/read split) -- see `docs/SERVER.md`.
 While connected to a multiplayer server, **actions are refused** unless `allowControlOnMultiplayer = true`
 in the config (reads still work).
 

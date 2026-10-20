@@ -12,7 +12,7 @@ The only state the API keeps is the two token hashes, SSE subscriber queues, and
 | Subsystem | Class/API | Resource | Actions | Events | Availability | Implementation | Limitations |
 |---|---|---|---|---|---|---|---|
 | HTTP server | `ApiServer` (JDK `HttpServer`) | `/api/v1` index | `POST /actions/execute` | — | client | Tested | No TLS (use a proxy); no WebSocket |
-| Auth | `Tokens` | — | — | — | client | Tested | Two persistent tokens: full and read-only; `regenerate` rotates both |
+| Auth | `Tokens` | — | — | — | client | Tested | Two persistent tokens: full and read-only; `regenerate` rotates both; a missing/deleted/blank value is regenerated and persisted on the next access, no restart, via an OS file lock + atomic rename so concurrent accessors converge on one value |
 | Control gating | `ApiContext.controlBlock` | — | refuses all actions while set (multiplayer without opt-in) | — | client | Tested | Platform decides when |
 | Discovery | `OpenApi`, registries | `/resources /actions /events /capabilities /mods /schema /openapi.json` | — | — | client | Tested | OpenAPI response schemas are generic |
 | Capabilities | `ApiContext.capabilitiesDocument` | `/capabilities` | — | — | client | Tested | Flags registered by the platform module |
@@ -69,6 +69,17 @@ Dropped because Baritone's API offers no call I could use without its command ma
 `tunnel`, `axis`, `surface`, `blacklist`, selection copy/paste/clear, and a generic command action. Also not
 exposed: `click` (needs a mouse), file commands (`explorefilter`, `saveall`, `reloadall`, `repack`), `come`,
 `invert`, `gc`, `render`, `schematic`.
+
+## Dedicated server (neoforge module — Draft, same unverified-at-runtime caveat as the client table)
+
+| Subsystem | Class/API | Resource | Actions | Events | Availability | Implementation | Limitations |
+|---|---|---|---|---|---|---|---|
+| Lifecycle | `ServerLifecycle`, `ServerStartedEvent`/`ServerStoppingEvent` | — | — | — | server | Draft | Dedicated-server dist only; a client's own integrated/singleplayer server does not also start this |
+| Game thread | `DedicatedServerGameThread` (`MinecraftServer#execute`) | — | — | — | server | Draft | Mirrors `MinecraftGameThread`'s `CompletableFuture` pattern |
+| Config | `ServerConfig` (`ModConfig.Type.SERVER`) | — | — | — | server | Draft | Per-world `serverconfig/herobrine_api-server.toml` |
+| Auth | `Tokens.loadOrCreateSingle(SecretAccessor)`, `ServerApiKeyAccessor` | — | — | — | server | Tested (core: generic accessor + locking; neoforge: real end-to-end `runServer` run) | One FULL-only key stored as the `apiKey` field inside `serverconfig/herobrine_api-server.toml` itself (not a separate file); no read/write split server-side |
+| Honest capability reporting | `ApiContext.client = false` | `/capabilities` | — | — | server | Tested (core) | Client-only resources/actions are not registered at all server-side, rather than registered-and-broken |
+| Minimal server resources | `ServerBindings` | `server.info`, `server.players` | — | — | server | Draft | Deliberately minimal; proves the lifecycle, not a server game-data inventory (out of scope here) |
 
 ## Not started (spec reference)
 - §4.8: living-entity AI (server-only); item/recipe definitions beyond what a stack carries

@@ -1,0 +1,114 @@
+package dev.herobrine.api.neoforge;
+
+import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.logging.LogUtils;
+import dev.herobrine.api.core.ApiContext;
+import net.minecraft.client.Minecraft;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
+import net.minecraft.network.chat.Component;
+import net.neoforged.api.distmarker.Dist;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
+import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
+import net.neoforged.neoforge.common.NeoForge;
+import org.slf4j.Logger;
+
+/**
+ * All client-only wiring: registers the built-in client bindings, lets other mods register theirs,
+ * starts the API if enabled, and owns the {@code /herobrine_api} client command. Only ever touched
+ * when {@code FMLEnvironment.dist.isClient()} -- see {@link HerobrineApiMod}'s constructor, which
+ * is the only place that reaches into this class, and only inside that guard. The
+ * {@code @EventBusSubscriber(..., value = Dist.CLIENT)} below is a second, independent guard: FML
+ * itself skips loading this class's game-bus listeners on a dedicated server.
+ */
+@EventBusSubscriber(modid = HerobrineApiMod.MOD_ID, value = Dist.CLIENT)
+final class ClientLifecycle {
+    private static final Logger LOG = LogUtils.getLogger();
+
+    private static volatile ApiContext ctx;
+    private static volatile ApiController controller;
+
+    private ClientLifecycle() {}
+
+    /** Called from {@code HerobrineApiMod}'s constructor, only when the current dist is CLIENT. */
+    static void init(ApiContext context, ApiController apiController) {
+        ctx = context;
+        controller = apiController;
+    }
+
+    /** Runs after every mod constructor, so third-party RegisterApiEvent listeners are in place. */
+    static void onClientSetup(FMLClientSetupEvent event) {
+        ApiContext c = ctx;
+        ClientBindings.register(c);
+        ModBindings.register(c);
+        WorldBindings.register(c);
+        EntityBindings.register(c);
+        InventoryBindings.register(c);
+        CraftingBindings.register(c);
+        StationBindings.register(c);
+        ChatLog.register(c);
+        BaritoneBindings.register(c);
+        NeoForge.EVENT_BUS.post(new RegisterApiEvent(c));
+        if (ClientConfig.ENABLED.get()) {
+            try { controller.start(); }
+            catch (Exception e) { LOG.error("Failed to start Herobrine API", e); }
+        } else {
+            LOG.info("Herobrine API is disabled in config; use /herobrine_api on to start it");
+        }
+    }
+
+    /** Non-null while control actions must be refused: connected to a remote server without opt-in. */
+    static String controlBlockReason() {
+        Minecraft mc = Minecraft.getInstance();
+        boolean onRemoteServer = mc.level != null && !mc.hasSingleplayerServer();
+        if (onRemoteServer && !ClientConfig.ALLOW_CONTROL_ON_MULTIPLAYER.get())
+            return "Control actions are disabled on multiplayer servers "
+                    + "(set allowControlOnMultiplayer=true in herobrine_api-client.toml to override)";
+        return null;
+    }
+
+    @SubscribeEvent
+    static void onRegisterCommands(RegisterClientCommandsEvent event) {
+        CommandDispatcher<CommandSourceStack> d = event.getDispatcher();
+        d.register(Commands.literal("herobrine_api")
+                .then(Commands.literal("on").executes(cx -> {
+                    ClientConfig.ENABLED.set(true);
+                    ClientConfig.ENABLED.save();
+                    try {
+                        int port = controller.start();
+                        reply(cx.getSource(), "Herobrine API running on 127.0.0.1:" + port);
+                    } catch (Exception e) {
+                        reply(cx.getSource(), "Could not start Herobrine API: " + e.getMessage());
+                    }
+                    return 1;
+                }))
+                .then(Commands.literal("off").executes(cx -> {
+                    ClientConfig.ENABLED.set(false);
+                    ClientConfig.ENABLED.save();
+                    controller.stop();
+                    reply(cx.getSource(), "Herobrine API stopped; held keys released");
+                    return 1;
+                }))
+                .then(Commands.literal("regenerate").executes(cx -> {
+                    try {
+                        controller.regenerateTokens();
+                        reply(cx.getSource(), "New tokens written to config/herobrine_api.token and herobrine_api.read-token");
+                    } catch (Exception e) {
+                        reply(cx.getSource(), "Could not regenerate tokens: " + e.getMessage());
+                    }
+                    return 1;
+                }))
+                .then(Commands.literal("status").executes(cx -> {
+                    reply(cx.getSource(), controller.isRunning()
+                            ? "Herobrine API running on 127.0.0.1:" + controller.port()
+                            : "Herobrine API is off");
+                    return 1;
+                })));
+    }
+
+    private static void reply(CommandSourceStack src, String msg) {
+        src.sendSuccess(() -> Component.literal(msg), false);
+    }
+}

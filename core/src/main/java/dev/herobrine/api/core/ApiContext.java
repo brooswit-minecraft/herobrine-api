@@ -19,6 +19,13 @@ public final class ApiContext {
     public volatile LongSupplier observedTick = () -> -1;
     public volatile BooleanSupplier serverCompanion = () -> false;
     public volatile String platform = "unknown";
+    /**
+     * Whether this context is running embedded in the Minecraft client (as opposed to a dedicated
+     * server). Defaults to true to preserve existing client behavior; a dedicated-server platform
+     * module must set this to false before starting the API so client-only resources/actions are
+     * reported honestly rather than registered-but-broken.
+     */
+    public volatile boolean client = true;
     /** Where executed actions are logged (the game log). */
     public volatile Consumer<String> log = s -> {};
     /**
@@ -41,7 +48,7 @@ public final class ApiContext {
         Map<String, Object> caps = new java.util.TreeMap<>(), ints = new java.util.TreeMap<>();
         capabilityFlags.forEach((k, v) -> caps.put(k, v.getAsBoolean()));
         integrations.forEach((k, v) -> ints.put(k, v.getAsBoolean()));
-        return Map.of("client", true, "serverCompanion", serverCompanion.getAsBoolean(),
+        return Map.of("client", client, "serverCompanion", serverCompanion.getAsBoolean(),
                 "integrations", ints, "capabilities", caps, "platform", platform);
     }
 
