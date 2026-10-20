@@ -1,7 +1,16 @@
 package dev.herobrine.api.neoforge;
 
 import dev.herobrine.api.core.Tokens;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
 /**
@@ -10,20 +19,31 @@ import net.neoforged.neoforge.common.ModConfigSpec;
  * {@link Tokens.SecretAccessor} contract, so {@link Tokens#loadOrCreateSingle(Tokens.SecretAccessor)}
  * gives the dedicated server's operator key the exact same regenerate-on-access, stability, and
  * concurrency guarantees as the client's file-based tokens, without a second file and without a
- * new auth model: reads/writes go through {@code ModConfigSpec}'s own supported API.
+ * new auth model.
  * <p>
- * {@link #read()} calls {@link ModConfigSpec.ConfigValue#getRaw()} rather than {@code get()} so it
- * always reflects the live loaded config, never a value this accessor cached itself.
- * {@link #write(String)} calls {@code set} then {@code save()}, which persists the whole TOML file
- * back out through NightConfig's own file-backed {@code Config} (the same mechanism NeoForge uses
- * for every config write) and fires the config-reloading event; verified end-to-end with a real
- * disposable dedicated-server run (see docs/SERVER.md). Known limitation: unlike the client's
- * per-request disk re-read, this does not notice an operator hand-editing the TOML file on disk
- * while the server is running -- NeoForge does not live-watch {@code ModConfig.Type.SERVER} files
- * for external edits, so such an edit only takes effect on the next server start.
+ * <b>Why this reads the file directly instead of {@code ModConfigSpec.ConfigValue#getRaw()}:</b>
+ * {@code getRaw()} reads {@code spec.loadedConfig.config()}, an in-memory {@code Config} object
+ * NeoForge populated once when the config loaded -- it is never re-read from disk afterward.
+ * NeoForge does not live-watch {@code ModConfig.Type.SERVER} files for external changes, so if an
+ * operator deletes the file or blanks the {@code apiKey} line while the server is running, {@code
+ * getRaw()} keeps returning the stale in-memory value forever: the "regenerate on next access, no
+ * restart" requirement would silently not apply to this flavor. So {@link #read()} parses the real
+ * {@code apiKey} line out of {@link #configFilePath} itself, every time, and {@link #write(String)}
+ * replaces that one line via write-temp-then-atomic-rename (same technique {@code Tokens}'s own
+ * file-based accessor uses) -- every other line (comments, {@code enabled}, {@code port}, ...) is
+ * carried through byte-for-byte. After a successful write, {@link ModConfigSpec.ConfigValue#set}
+ * is also called (best-effort) purely so NeoForge's own in-memory cache doesn't silently diverge
+ * from disk for any other in-process reader -- {@code save()} is deliberately never called here,
+ * since that would let NeoForge rewrite the whole file from its in-memory model instead of our
+ * direct, minimal, byte-for-byte-preserving edit.
  */
 final class ServerApiKeyAccessor implements Tokens.SecretAccessor {
     private static final int MIN_SECRET_LENGTH = 32;
+    /** Matches a NightConfig-TOML-serialized {@code apiKey = "..."} line; {@code group(1)} is the
+     * raw (unescaped) value. NightConfig always quotes string values, including the blank default. */
+    private static final Pattern API_KEY_LINE = Pattern.compile("^\\s*apiKey\\s*=\\s*\"(.*)\"\\s*$");
+    private static final String KEY_NAME = "apiKey";
+    private static final String TMP_SUFFIX = ".tmp-";
 
     private final ModConfigSpec.ConfigValue<String> value;
     private final Path configFilePath;
@@ -36,17 +56,51 @@ final class ServerApiKeyAccessor implements Tokens.SecretAccessor {
     }
 
     @Override
-    public String read() {
-        String raw = value.getRaw();
-        if (raw == null) return null;
-        String trimmed = raw.trim();
-        return trimmed.length() >= MIN_SECRET_LENGTH ? trimmed : null;
+    public String read() throws IOException {
+        if (!Files.isRegularFile(configFilePath)) return null;
+        for (String line : Files.readAllLines(configFilePath, StandardCharsets.UTF_8)) {
+            Matcher m = API_KEY_LINE.matcher(line);
+            if (m.matches()) {
+                String v = m.group(1).trim();
+                return v.length() >= MIN_SECRET_LENGTH ? v : null;
+            }
+        }
+        return null; // no apiKey line at all: treat the same as blank
     }
 
     @Override
-    public void write(String secret) {
-        value.set(secret);
-        value.save();
+    public void write(String secret) throws IOException {
+        List<String> existing = Files.isRegularFile(configFilePath)
+                ? Files.readAllLines(configFilePath, StandardCharsets.UTF_8)
+                : List.of();
+        List<String> out = new ArrayList<>(existing.size() + 1);
+        boolean replaced = false;
+        for (String line : existing) {
+            if (API_KEY_LINE.matcher(line).matches()) {
+                out.add(KEY_NAME + " = \"" + secret + "\"");
+                replaced = true;
+            } else {
+                out.add(line);
+            }
+        }
+        if (!replaced) out.add(KEY_NAME + " = \"" + secret + "\"");
+
+        Path tmp = configFilePath.resolveSibling(configFilePath.getFileName().toString() + TMP_SUFFIX + Long.toHexString(ThreadLocalRandom.current().nextLong()));
+        try {
+            Files.write(tmp, out, StandardCharsets.UTF_8);
+            Files.move(tmp, configFilePath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            Files.deleteIfExists(tmp);
+            throw new IOException("could not persist the dedicated server's API key to " + configFilePath, e);
+        }
+
+        // Best-effort only: the file write above is the durable, authoritative result already.
+        // This just keeps NeoForge's in-memory cache from silently disagreeing with disk for any
+        // other in-process reader of ServerConfig.API_KEY -- never save() (see class javadoc).
+        try {
+            value.set(secret);
+        } catch (RuntimeException ignored) {
+        }
     }
 
     @Override
