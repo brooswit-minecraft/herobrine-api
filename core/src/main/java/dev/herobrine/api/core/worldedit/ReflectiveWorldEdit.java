@@ -373,25 +373,32 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
     }
 
     /**
-     * Builds a {@code Polygonal2DRegion} entirely without a {@code World} - verified: the no-arg
-     * constructor (world = null), then {@code addPoint(BlockVector2)} per point and
-     * {@code setMinimumY}/{@code setMaximumY}, both of which only call {@code getWorldMinY()}/
-     * {@code getWorldMaxY()} internally (via {@code recalculate()}), and those gracefully return
-     * {@code Integer.MIN_VALUE}/{@code MAX_VALUE} when {@code world == null}
-     * ({@code AbstractRegion.java}). At least 3 points are required - verified: fewer and the real
+     * Builds a {@code Polygonal2DRegion} via its verified 4-arg constructor
+     * {@code Polygonal2DRegion(World world, List<BlockVector2> points, int minY, int maxY)} - world may be
+     * {@code null} (same as every other no-{@code World} region here; its own no-arg/{@code World}-only
+     * constructors delegate to this one with {@code world = null}). Both Y bounds are passed in one shot,
+     * {@code points} already populated, deliberately <b>not</b> built via the no-arg constructor followed by
+     * separate {@code setMinimumY}/{@code setMaximumY} calls: verified {@code recalculate()} (called by
+     * every mutator, including both those setters) re-sorts {@code minY}/{@code maxY} from whatever they
+     * currently are, every time either one changes - {@code Polygonal2DRegion.java}'s own
+     * {@code recalculate()} body does {@code minY = Math.min(oldMinY, oldMaxY); maxY = Math.max(oldMinY,
+     * oldMaxY)}. Starting from the default {@code 0..0} and calling {@code setMinimumY(64)} then
+     * {@code setMaximumY(70)} one at a time therefore silently produces {@code 0..70}, not the requested
+     * {@code 64..70}: the first call's re-sort flips the still-{@code 0} max past the newly-set {@code 64}
+     * min before the second call ever runs. Passing both bounds to the 4-arg constructor avoids this
+     * entirely, since {@code recalculate()} only runs once there, after both fields already hold their
+     * final, correct values.
+     * <p>At least 3 points are required - verified: fewer and the real
      * {@code Polygonal2DRegion.contains(BlockVector3)} always returns false (a silent, always-empty
      * region), which this adapter rejects explicitly instead.
      */
     private Object polygonRegion(Polygon polygon) {
         if (polygon.points().size() < 3) throw ApiException.badRequest("A polygon needs at least 3 points");
-        Object region = create(POLYGONAL_2D_REGION);
+        List<Object> points = new ArrayList<>();
         for (Point2D p : polygon.points()) {
-            Object point = invokeStatic(load(BLOCK_VECTOR2), "at", p.x(), p.z());
-            invoke(region, "addPoint", point);
+            points.add(invokeStatic(load(BLOCK_VECTOR2), "at", p.x(), p.z()));
         }
-        invoke(region, "setMinimumY", polygon.minY());
-        invoke(region, "setMaximumY", polygon.maxY());
-        return region;
+        return create(POLYGONAL_2D_REGION, null, points, polygon.minY(), polygon.maxY());
     }
 
     // ---- ellipsoid edits/selection ----

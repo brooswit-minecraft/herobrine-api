@@ -221,12 +221,10 @@ class ReflectiveWorldEditTest {
         ApiException notPolygon = assertThrows(ApiException.class, () -> a.polygonSelection(actor));
         assertEquals("BAD_REQUEST", notPolygon.code);
 
-        var poly = new com.sk89q.worldedit.regions.Polygonal2DRegion();
-        poly.addPoint(com.sk89q.worldedit.math.BlockVector2.at(0, 0));
-        poly.addPoint(com.sk89q.worldedit.math.BlockVector2.at(4, 0));
-        poly.addPoint(com.sk89q.worldedit.math.BlockVector2.at(4, 4));
-        poly.setMinimumY(10);
-        poly.setMaximumY(20);
+        var poly = new com.sk89q.worldedit.regions.Polygonal2DRegion(world, java.util.List.of(
+                com.sk89q.worldedit.math.BlockVector2.at(0, 0),
+                com.sk89q.worldedit.math.BlockVector2.at(4, 0),
+                com.sk89q.worldedit.math.BlockVector2.at(4, 4)), 10, 20);
         session().selectionRegion = poly;
         var result = a.polygonSelection(actor);
         assertEquals(new WorldEditAdapter.Polygon(java.util.List.of(
@@ -256,6 +254,31 @@ class ReflectiveWorldEditTest {
 
         a.copy(actor, triangle);
         assertNotNull(session().clipboard);
+    }
+
+    @Test void polygonEditsPreserveBothYBoundsExactlyNotClobberedToZero() {
+        // Verified real Polygonal2DRegion.recalculate() (called by setMinimumY/setMaximumY) re-sorts
+        // min/maxY from whatever they currently hold - building via the no-arg ctor plus two separate
+        // setter calls would silently turn a requested 64..70 into 0..70 (the first setter's re-sort flips
+        // the still-0 max past the newly-set 64 min before the second setter ever runs). The adapter
+        // instead uses the 4-arg constructor, so both bounds are already final before any sort happens.
+        var triangle = new WorldEditAdapter.Polygon(java.util.List.of(
+                new WorldEditAdapter.Point2D(0, 0),
+                new WorldEditAdapter.Point2D(4, 0),
+                new WorldEditAdapter.Point2D(4, 4)), 64, 70);
+        a.setBlocks(actor, triangle, "stone");
+        assertTrue(FakeWorldEdit.INSTANCE.calls.stream()
+                .anyMatch(c -> c.startsWith("setBlocks:Polygonal2DRegion(") && c.contains("y=64..70")));
+    }
+
+    @Test void polygonEditsNormalizeAReversedYRangeCorrectly() {
+        var reversed = new WorldEditAdapter.Polygon(java.util.List.of(
+                new WorldEditAdapter.Point2D(0, 0),
+                new WorldEditAdapter.Point2D(4, 0),
+                new WorldEditAdapter.Point2D(4, 4)), 20, 10); // minY > maxY, given out of order on purpose
+        a.setBlocks(actor, reversed, "stone");
+        assertTrue(FakeWorldEdit.INSTANCE.calls.stream()
+                .anyMatch(c -> c.startsWith("setBlocks:Polygonal2DRegion(") && c.contains("y=10..20")));
     }
 
     @Test void ellipsoidSelectionReportsCenterAndRadii() {

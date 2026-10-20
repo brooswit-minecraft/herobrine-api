@@ -99,11 +99,12 @@ public interface WorldEditAdapter {
 
     /**
      * A polygon footprint (at least 3 points, in the X/Z plane) extruded through a vertical range minY..maxY
-     * (inclusive). Maps exactly to a WorldEdit {@code Polygonal2DRegion} - verified world-independent:
-     * {@code Polygonal2DRegion()} (no-arg ctor), then {@code addPoint(BlockVector2)} per point and
-     * {@code setMinimumY}/{@code setMaximumY}; {@code AbstractRegion.getWorldMinY/getWorldMaxY} gracefully
-     * default to {@code Integer.MIN_VALUE}/{@code MAX_VALUE} when there is no {@code World} (there never is
-     * one here - no actor/world construction, per MINECRAFT-476).
+     * (inclusive). Maps exactly to a WorldEdit {@code Polygonal2DRegion} - verified world-independent: its
+     * 4-arg constructor ({@code World, List<BlockVector2>, int minY, int maxY}) accepts a {@code null}
+     * {@code World}. Built with both Y bounds passed to that constructor in one call, not via separate
+     * {@code setMinimumY}/{@code setMaximumY} calls afterward - verified those (and every other mutator)
+     * re-sort the bounds from whatever they currently hold, which can silently clobber one of them when set
+     * one at a time (see {@code ReflectiveWorldEdit.polygonRegion}'s javadoc for the full citation).
      */
     record Polygon(List<Point2D> points, int minY, int maxY) {}
 
