@@ -30,7 +30,9 @@ public final class LocalSession {
         return new EditSession(actor, blockChangeLimit);
     }
 
+    /** Mirrors the real {@code LocalSession.remember}: a no-op for an edit session with no recorded changes. */
     public void remember(EditSession editSession) {
+        if (editSession.size == 0) return;
         while (historyPointer < history.size()) history.remove(historyPointer);
         history.add(editSession);
         historyPointer = history.size();

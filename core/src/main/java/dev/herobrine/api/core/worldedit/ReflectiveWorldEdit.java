@@ -89,6 +89,23 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
 
     // ---- edits ----
 
+    /**
+     * Real WorldEdit applies changes one block at a time through an extent chain where
+     * {@code ChangeSetExtent} (records into undo history) is wrapped *inside*
+     * {@code BlockChangeLimiter} (verified: {@code BlockChangeLimiter.java} checks {@code count >= limit}
+     * and only then delegates to the wrapped, history-recording extent) - so a change that exceeds the
+     * limit still leaves every block applied up to that point already recorded. WorldEdit's own command
+     * dispatcher therefore calls {@code session.remember(editSession)} in a {@code finally}
+     * ({@code PlatformCommandManager.java:510-513}), unconditionally, not only on success. {@code remember}
+     * itself is a no-op for an edit session with no recorded changes, so calling it unconditionally here is
+     * always safe - the opposite (remembering only on success, the first draft of this adapter) silently
+     * discards a partially-applied, otherwise-unrecoverable edit.
+     */
+    private void rememberAndClose(Object session, Object editSession) {
+        try { invoke(session, "remember", editSession); }
+        finally { invoke(editSession, "close"); }
+    }
+
     @Override public int setBlocks(Object actor, Box box, String pattern) {
         Object we = worldEdit();
         Object region = region(box);
@@ -96,12 +113,10 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
         Object session = session(we, actor);
         Object editSession = newEditSession(session, actor);
         try {
-            int changed = (Integer) invokeTranslating(editSession, "setBlocks", MAX_CHANGED_BLOCKS_EXCEPTION,
+            return (Integer) invokeTranslating(editSession, "setBlocks", MAX_CHANGED_BLOCKS_EXCEPTION,
                     "Edit exceeds the configured block change limit", region, patternObj);
-            invoke(session, "remember", editSession);
-            return changed;
         } finally {
-            invoke(editSession, "close");
+            rememberAndClose(session, editSession);
         }
     }
 
@@ -113,12 +128,10 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
         Object session = session(we, actor);
         Object editSession = newEditSession(session, actor);
         try {
-            int changed = (Integer) invokeTranslating(editSession, "replaceBlocks", MAX_CHANGED_BLOCKS_EXCEPTION,
+            return (Integer) invokeTranslating(editSession, "replaceBlocks", MAX_CHANGED_BLOCKS_EXCEPTION,
                     "Edit exceeds the configured block change limit", region, maskObj, patternObj);
-            invoke(session, "remember", editSession);
-            return changed;
         } finally {
-            invoke(editSession, "close");
+            rememberAndClose(session, editSession);
         }
     }
 
@@ -150,7 +163,10 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
             invokeStatic(load(OPERATIONS), "completeLegacy", copyOp);
             invoke(session, "setClipboard", create(CLIPBOARD_HOLDER, clipboard));
         } finally {
-            invoke(editSession, "close");
+            // copy only reads the world through editSession (the clipboard is the write destination), so
+            // this is normally a no-op remember - kept for parity with every other call site and with
+            // WorldEdit's own dispatcher, which remembers whichever EditSession a command used, unconditionally.
+            rememberAndClose(session, editSession);
         }
     }
 
@@ -165,9 +181,8 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
             pasteBuilder = invoke(pasteBuilder, "to", to);
             Object operation = invoke(pasteBuilder, "build");
             invokeStatic(load(OPERATIONS), "completeLegacy", operation);
-            invoke(session, "remember", editSession);
         } finally {
-            invoke(editSession, "close");
+            rememberAndClose(session, editSession);
         }
     }
 

@@ -15,8 +15,11 @@ public final class PasteBuilder {
     public PasteBuilder to(BlockVector3 to) { this.to = to; return this; }
 
     public Operation build() {
-        return new Operation() {
-            @Override public String toString() { return "Paste(" + clipboard + "->" + to + ")"; }
-        };
+        return new PasteOperation(clipboard, targetExtent, to);
+    }
+
+    /** Carries the destination extent through so the fake can simulate the paste actually writing blocks. */
+    public record PasteOperation(Clipboard clipboard, Extent targetExtent, BlockVector3 to) implements Operation {
+        @Override public String toString() { return "Paste(" + clipboard + "->" + to + ")"; }
     }
 }

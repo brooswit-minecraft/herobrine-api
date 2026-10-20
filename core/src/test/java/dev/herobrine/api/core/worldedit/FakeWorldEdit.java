@@ -42,21 +42,33 @@ public final class FakeWorldEdit {
         return new NamedMask(input);
     }
 
+    /** "Attempts" to change a fixed number of blocks, applied one at a time against the session's own
+     *  configured limit (see {@link EditSession#applyWithLimit}) - not an atomic preflight check, so an
+     *  edit that exceeds the limit still leaves the blocks up to the limit applied and recorded. */
     public int setBlocks(EditSession session, Region region, Pattern pattern) throws MaxChangedBlocksException {
-        if ("overflow".equals(pattern.toString())) throw new MaxChangedBlocksException(100);
         calls.add("setBlocks:" + region + ":" + pattern);
-        return 7;
+        return session.applyWithLimit(7);
     }
 
     public int replaceBlocks(EditSession session, Region region, Mask mask, Pattern pattern) throws MaxChangedBlocksException {
-        if ("overflow".equals(pattern.toString())) throw new MaxChangedBlocksException(100);
         calls.add("replaceBlocks:" + region + ":" + mask + ":" + pattern);
-        return 3;
+        return session.applyWithLimit(3);
     }
 
+    /**
+     * Simulates the operation actually running: a paste writes a fixed number of blocks into its
+     * destination extent (the editSession passed to {@code ClipboardHolder.createPaste}), via the same
+     * per-write-limited {@link EditSession#applyWithLimit} every other write goes through - so a paste's
+     * history bookkeeping is exercised the same way setBlocks/replaceBlocks is. A plain copy's
+     * {@code ForwardExtentCopy} isn't a {@code PasteOperation}, so it doesn't touch any size - copy only
+     * reads through its editSession, it never writes through it.
+     */
     public void completeLegacy(Operation op) throws MaxChangedBlocksException {
-        if (op.toString().contains("overflow")) throw new MaxChangedBlocksException(100);
         calls.add("completeLegacy:" + op);
+        if (op instanceof com.sk89q.worldedit.session.PasteBuilder.PasteOperation paste
+                && paste.targetExtent() instanceof EditSession editSession) {
+            editSession.applyWithLimit(4);
+        }
     }
 
     public ClipboardFormat schematicFormat() {

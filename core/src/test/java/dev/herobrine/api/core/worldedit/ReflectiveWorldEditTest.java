@@ -63,14 +63,20 @@ class ReflectiveWorldEditTest {
         assertEquals(1, session().history.size());
     }
 
-    @Test void exceedingTheSessionBlockChangeLimitIsABadRequestAndNeverRemembered() {
+    @Test void exceedingTheSessionBlockChangeLimitIsABadRequestButRemembersThePartialEdit() {
         // Proves the adapter honors LocalSession.createEditSession's configured limit (not a bare,
-        // unlimited WorldEdit.newEditSession builder): FakeWorldEdit.setBlocks always "changes" 7 blocks.
+        // unlimited WorldEdit.newEditSession builder): FakeWorldEdit.setBlocks "attempts" 7 blocks.
+        // Real WorldEdit applies (and records) writes one at a time - verified against BlockChangeLimiter,
+        // which checks the count and only then delegates to the recording extent - so the first 5 of those
+        // 7 writes are already applied and recorded by the time the 6th is rejected. WorldEdit's own command
+        // dispatcher remembers that EditSession unconditionally (PlatformCommandManager.java:510-513), so
+        // this partial edit must stay undo-able rather than being silently discarded.
         session().blockChangeLimit = 5;
         Box box = new Box(0, 0, 0, 1, 1, 1);
         ApiException e = assertThrows(ApiException.class, () -> a.setBlocks(actor, box, "stone"));
         assertEquals("BAD_REQUEST", e.code);
-        assertEquals(0, session().history.size());
+        assertEquals(1, session().history.size());
+        assertEquals(5, session().history.get(0).size);
     }
 
     @Test void replaceBlocksBuildsMaskAndPattern() {
@@ -90,11 +96,11 @@ class ReflectiveWorldEditTest {
         assertEquals("BAD_REQUEST", e2.code);
     }
 
-    @Test void exceedingTheBlockChangeLimitIsABadRequestNotACrash() {
+    @Test void editSessionIsAlwaysClosedEvenWhenTheEditIsRejected() {
+        session().blockChangeLimit = 5;
         Box box = new Box(0, 0, 0, 1, 1, 1);
-        ApiException e = assertThrows(ApiException.class, () -> a.setBlocks(actor, box, "overflow"));
-        assertEquals("BAD_REQUEST", e.code);
-        assertEquals(0, session().history.size()); // the failed edit session was never remembered
+        assertThrows(ApiException.class, () -> a.setBlocks(actor, box, "stone"));
+        assertTrue(session().history.get(0).closed);
     }
 
     @Test void undoRedoHappyPath() {
