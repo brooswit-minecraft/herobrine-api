@@ -129,10 +129,14 @@ public interface WorldEditAdapter {
 
     /**
      * Leaves a shell of {@code thickness} blocks at the box's boundary untouched, and replaces every block
-     * in the interior beyond it with a pattern (verified: {@code EditSession.hollowOutRegion} only
-     * {@code setBlock}s positions with no neighbor in its computed boundary/"outside" set - the boundary
-     * shell itself is what survives, not the interior).
-     * @return the number of blocks changed
+     * in the interior beyond it with a pattern. Computed geometrically (the interior box shrunk by
+     * {@code thickness} on every axis, then {@link #setBlocks(Object, Box, String)}) rather than via
+     * {@code EditSession.hollowOutRegion} - that method's own shell/interior split is determined by flood-
+     * filling through already-passable world blocks (verified: {@code EditSession.recurseHollow} checks
+     * {@code getBlock(current)} against the real world), so for an already-solid box (the common case) it
+     * never finds a shell at all and overwrites the entire region. This method's behavior is geometry-only
+     * and does not depend on existing terrain.
+     * @return the number of blocks changed, or 0 if {@code thickness} leaves no interior
      */
     int hollowOutBox(Object actor, Box box, int thickness, String pattern);
 

@@ -71,34 +71,6 @@ public final class FakeWorldEdit {
         return session.applyWithLimit(17);
     }
 
-    /** Positions the fake touched on the last {@link #hollowOutRegion} call, as "x,y,z" - lets a test
-     *  distinguish shell-preserved-interior-changed from the reverse, instead of only a block count. */
-    public final List<String> lastHollowInterior = new ArrayList<>();
-
-    /**
-     * Mirrors the real {@code EditSession.hollowOutRegion}'s verified semantics (EditSession.java:2496-2558):
-     * {@code thickness} boundary layers are left untouched (the shell); every other position (the interior)
-     * gets the pattern. This is a geometric approximation for an axis-aligned region (distance to the
-     * nearest face, not the real flood-fill), sufficient to prove the shell/interior polarity rather than a
-     * bit-exact port of the real algorithm.
-     */
-    public int hollowOutRegion(EditSession session, Region region, int thickness, Pattern pattern) throws MaxChangedBlocksException {
-        lastHollowInterior.clear();
-        BlockVector3 min = region.getMinimumPoint();
-        BlockVector3 max = region.getMaximumPoint();
-        for (int x = min.getX(); x <= max.getX(); x++) {
-            for (int y = min.getY(); y <= max.getY(); y++) {
-                for (int z = min.getZ(); z <= max.getZ(); z++) {
-                    int distToFace = Math.min(Math.min(x - min.getX(), max.getX() - x),
-                            Math.min(Math.min(y - min.getY(), max.getY() - y), Math.min(z - min.getZ(), max.getZ() - z)));
-                    if (distToFace >= thickness) lastHollowInterior.add(x + "," + y + "," + z);
-                }
-            }
-        }
-        calls.add("hollowOutRegion:" + region + ":" + thickness + ":" + pattern);
-        return session.applyWithLimit(lastHollowInterior.size());
-    }
-
     /**
      * Simulates the operation actually running: a paste writes a fixed number of blocks into its
      * destination extent (the editSession passed to {@code ClipboardHolder.createPaste}), via the same

@@ -368,18 +368,33 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
         }
     }
 
+    /**
+     * Deliberately does NOT call {@code EditSession.hollowOutRegion} - verified its actual body
+     * ({@code EditSession.java:2743-2765}, {@code recurseHollow}): it flood-fills from the region's faces
+     * through existing *passable* blocks only ({@code getBlock(current).getBlockType().getMaterial()
+     * .isMovementBlocker()}), reading real world state. For a region that is already solid (the common case
+     * for a box nobody has carved into yet), that flood fill never starts, the "outside"/shell set stays
+     * empty, and the method fills the *entire* region, including what should be the shell - the opposite of
+     * "preserve a shell." Its shell-preserving behavior depends on pre-existing terrain, not geometry, so it
+     * cannot back a deterministic typed contract. Instead, this computes the interior box directly (shrunk
+     * by {@code thickness} on every axis) and reuses the already-verified, already-tested
+     * {@link #setBlocks(Object, Box, String)} on it - deterministic regardless of existing terrain, built
+     * only from already-verified primitives.
+     */
     @Override public int hollowOutBox(Object actor, Box box, int thickness, String pattern) {
-        Object we = worldEdit();
-        Object region = region(box);
-        Object patternObj = parsePattern(we, actor, pattern);
-        Object session = session(we, actor);
-        Object editSession = newEditSession(session, actor);
-        try {
-            return (Integer) invokeTranslating(editSession, "hollowOutRegion", MAX_CHANGED_BLOCKS_EXCEPTION,
-                    "Edit exceeds the configured block change limit", region, thickness, patternObj);
-        } finally {
-            rememberAndClose(session, editSession);
-        }
+        if (thickness < 0) throw ApiException.badRequest("thickness must not be negative");
+        Box inner = shrink(box, thickness);
+        if (inner == null) return 0; // thickness leaves no interior: nothing qualifies, nothing changes
+        return setBlocks(actor, inner, pattern);
+    }
+
+    /** @return the box shrunk by {@code thickness} on every axis, or null if that inverts any axis. */
+    private Box shrink(Box box, int thickness) {
+        int minX = box.minX() + thickness, maxX = box.maxX() - thickness;
+        int minY = box.minY() + thickness, maxY = box.maxY() - thickness;
+        int minZ = box.minZ() + thickness, maxZ = box.maxZ() - thickness;
+        if (minX > maxX || minY > maxY || minZ > maxZ) return null;
+        return new Box(minX, minY, minZ, maxX, maxY, maxZ);
     }
 
     // ---- transforms ----

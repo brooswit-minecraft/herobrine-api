@@ -44,10 +44,6 @@ public final class EditSession implements Extent, AutoCloseable {
         return FakeWorldEdit.INSTANCE.makePyramid(this, position, block, size, filled);
     }
 
-    public int hollowOutRegion(Region region, int thickness, Pattern pattern) throws MaxChangedBlocksException {
-        return FakeWorldEdit.INSTANCE.hollowOutRegion(this, region, thickness, pattern);
-    }
-
     /** Applies (and records) writes one at a time, like the real {@code BlockChangeLimiter}. */
     public int applyWithLimit(int attempted) throws MaxChangedBlocksException {
         if (maxBlocks < 0 || attempted <= maxBlocks) {

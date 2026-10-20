@@ -202,24 +202,33 @@ class ReflectiveWorldEditTest {
         assertEquals(17, pyramid);
         assertTrue(FakeWorldEdit.INSTANCE.calls.contains("makePyramid:BV3(1,2,3):stone:5:true"));
 
-        // 3x3x3 box, thickness 1: only the exact center is more than `thickness` away from every face,
-        // so exactly 1 block (the interior) changes - see hollowOutBoxPreservesTheShellAndChangesTheInterior
-        // for the test that actually distinguishes shell-preserved from interior-preserved.
+        // 3x3x3 box, thickness 1: the shrunk interior is the single center block - delegates to setBlocks,
+        // so the fake's usual fixed "7 changed" applies - see the dedicated hollowOutBox tests below for the
+        // actual shell/interior geometry this builds instead of relying on EditSession.hollowOutRegion.
         int hollow = a.hollowOutBox(actor, new Box(0, 0, 0, 2, 2, 2), 1, "stone");
-        assertEquals(1, hollow);
+        assertEquals(7, hollow);
+        assertTrue(FakeWorldEdit.INSTANCE.calls.contains("setBlocks:CuboidRegion(BV3(1,1,1),BV3(1,1,1)):stone"));
         assertEquals(4, session().history.size()); // each generation call is its own remembered edit
     }
 
-    @Test void hollowOutBoxPreservesTheShellAndChangesTheInterior() {
-        // Verified against the real EditSession.hollowOutRegion body (EditSession.java:2496-2558): `thickness`
-        // boundary layers are left untouched (the shell), and setBlock only runs for the interior beyond it -
-        // the opposite of "replace the shell, leave the interior", which a prior draft of this adapter's own
-        // javadoc incorrectly claimed.
-        int changed = a.hollowOutBox(actor, new Box(0, 0, 0, 4, 4, 4), 1, "stone"); // 5x5x5 box, thickness 1
-        assertEquals(27, changed); // the 3x3x3 interior
-        assertFalse(FakeWorldEdit.INSTANCE.lastHollowInterior.contains("0,0,0")); // a shell corner: untouched
-        assertFalse(FakeWorldEdit.INSTANCE.lastHollowInterior.contains("2,2,0")); // a shell face center: untouched
-        assertTrue(FakeWorldEdit.INSTANCE.lastHollowInterior.contains("2,2,2")); // the exact center: touched
+    @Test void hollowOutBoxDelegatesToSetBlocksOnTheGeometricallyShrunkInterior() {
+        // Deliberately NOT built on EditSession.hollowOutRegion: verified its actual body
+        // (EditSession.recurseHollow, EditSession.java:2743-2765) flood-fills from the region's faces
+        // through existing *passable* world blocks only - for an already-solid box (the common case for one
+        // nobody has carved into yet) that flood fill never starts, its "outside"/shell set stays empty, and
+        // the real method overwrites the *entire* region, not just the interior. That makes its shell
+        // behavior depend on incidental terrain, not geometry, so it can't back a deterministic typed
+        // contract. This computes the interior box directly (shrunk by `thickness` on every axis) and reuses
+        // the already-verified setBlocks instead - deterministic regardless of terrain.
+        a.hollowOutBox(actor, new Box(0, 0, 0, 4, 4, 4), 1, "stone"); // 5x5x5 box, thickness 1 -> 3x3x3 interior
+        assertTrue(FakeWorldEdit.INSTANCE.calls.contains("setBlocks:CuboidRegion(BV3(1,1,1),BV3(3,3,3)):stone"));
+    }
+
+    @Test void hollowOutBoxWithNoRemainingInteriorChangesNothing() {
+        // 3x3x3 box, thickness 2: shrinking by 2 on every axis inverts the box (no interior exists at all).
+        int changed = a.hollowOutBox(actor, new Box(0, 0, 0, 2, 2, 2), 2, "stone");
+        assertEquals(0, changed);
+        assertTrue(session().history.isEmpty()); // no edit session was even created
     }
 
     @Test void pasteDefaultsMatchWorldEditsOwnBuilderDefaults() {
