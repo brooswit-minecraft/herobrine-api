@@ -28,25 +28,69 @@ public final class FakeWorldEdit {
     public volatile String version = "7.3.8+1379-7d32b45";
     public final List<String> calls = new ArrayList<>();
     public volatile boolean schematicIoFails;
+    public final com.sk89q.worldedit.session.SessionManager sessionManager = new com.sk89q.worldedit.session.SessionManager();
+    public final com.sk89q.worldedit.LocalConfiguration configuration = new com.sk89q.worldedit.LocalConfiguration();
+    /** WorldEdit's working directory (its config folder); the real one is {@code config/worldedit}. */
+    public volatile java.nio.file.Path workingDirectory = java.nio.file.Paths.get("worldedit-working-dir").toAbsolutePath();
+    /** WorldEdit's configured maxRadius; -1 (the real default) means unlimited. */
+    public volatile int maxRadius = -1;
 
     public static void reset() { INSTANCE = new FakeWorldEdit(); }
 
-    public Pattern parsePattern(String input) throws InputParseException {
+    /** Every ParserContext the adapter handed a parser, in order. */
+    public final List<com.sk89q.worldedit.extension.input.ParserContext> parserContexts = new ArrayList<>();
+
+    /**
+     * Mirrors what the real pattern parsers read from their context: {@code #clipboard} / {@code #copy} (with an
+     * optional {@code @[x,y,z]} offset) take the context session's clipboard - {@code ClipboardPatternParser}
+     * calls {@code context.requireSession()} - and a block pattern under the default restricted context needs
+     * the actor for WorldEdit's disallowed-blocks check ({@code DefaultBlockParser}).
+     */
+    public Pattern parsePattern(String input, com.sk89q.worldedit.extension.input.ParserContext context) throws InputParseException {
+        parserContexts.add(context);
         if ("bad-pattern".equals(input)) throw new InputParseException("Unknown pattern: " + input);
         calls.add("parsePattern:" + input);
+        String head = input.split("@", 2)[0];
+        if (head.equalsIgnoreCase("#clipboard") || head.equalsIgnoreCase("#copy")) {
+            try {
+                return new NamedPattern(input + "=" + context.requireSession().getClipboard().getClipboard());
+            } catch (com.sk89q.worldedit.EmptyClipboardException e) {
+                throw new InputParseException("Your clipboard is empty.");
+            }
+        }
+        if (context.isRestricted()) context.requireActor();
         return new NamedPattern(input);
     }
 
-    public Mask parseMask(String input) throws InputParseException {
+    /**
+     * Mirrors what the real mask parsers read from their context: {@code #region} / {@code #selection} /
+     * {@code #sel} take the context session's selection in the context world - {@code RegionMaskParser} calls
+     * {@code context.requireSession().getSelection(context.requireWorld())} - and every other mask tests blocks
+     * against the context's extent ({@code BlocksMaskParser}, {@code ExistingMaskParser}: {@code requireExtent()}).
+     */
+    public Mask parseMask(String input, com.sk89q.worldedit.extension.input.ParserContext context) throws InputParseException {
+        parserContexts.add(context);
         if ("bad-mask".equals(input)) throw new InputParseException("Unknown mask: " + input);
         calls.add("parseMask:" + input);
+        if (List.of("#region", "#selection", "#sel").contains(input)) {
+            try {
+                return new NamedMask(input + "=" + context.requireSession().getSelection(context.requireWorld()));
+            } catch (com.sk89q.worldedit.IncompleteRegionException e) {
+                throw new InputParseException("Make a region selection first.");
+            }
+        }
+        context.requireExtent();
         return new NamedMask(input);
     }
 
     /** "Attempts" to change a fixed number of blocks, applied one at a time against the session's own
      *  configured limit (see {@link EditSession#applyWithLimit}) - not an atomic preflight check, so an
      *  edit that exceeds the limit still leaves the blocks up to the limit applied and recorded. */
+    /** Makes edits fail the way WorldEdit's NeoForge world does once its ServerLevel has been unloaded. */
+    public volatile boolean worldUnloaded;
+
     public int setBlocks(EditSession session, Region region, Pattern pattern) throws MaxChangedBlocksException {
+        if (worldUnloaded) throw new RuntimeException("The reference to the world was lost (i.e. the world may have been unloaded)");
         calls.add("setBlocks:" + region + ":" + pattern);
         return session.applyWithLimit(7);
     }
@@ -118,7 +162,11 @@ public final class FakeWorldEdit {
     private record NamedMask(String name) implements Mask {
         @Override public String toString() { return name; }
     }
+    /** A schematic as loaded: a 2x2x2 region, so a paste of it writes at most 8 blocks. */
     private record NamedClipboard(String name) implements Clipboard {
+        @Override public com.sk89q.worldedit.regions.Region getRegion() {
+            return new com.sk89q.worldedit.regions.CuboidRegion(BlockVector3.at(0, 0, 0), BlockVector3.at(1, 1, 1));
+        }
         @Override public String toString() { return name; }
     }
 }

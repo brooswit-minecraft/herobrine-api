@@ -8,6 +8,7 @@ now, actions do the thing and return what it returned. The API keeps no operatio
 - `neoforge/` — Minecraft bindings (opt-in: `./gradlew -PwithNeoForge :neoforge:build`; compiles in CI against NeoForge 21.1.172 but **has never been run in a real client**). Loads on both the client and a dedicated server; see `docs/SERVER.md` for the dedicated-server side.
 - `docs/COVERAGE.md` — what is implemented vs. the spec
 - `docs/SERVER.md` — dedicated-server usage, config and key, and how it differs from the client
+- `docs/worldedit-coverage.md` — the WorldEdit 7.3.8 integration: verified API mapping, actor context, limits and errors
 
 ## CI
 `.github/workflows/ci.yml` runs the `core` tests and the NeoForge build on every PR and push to `main`. Publishing a GitHub release
@@ -40,6 +41,8 @@ curl -H "$H" -d '{"action":"input.key","parameters":{"key":"key.forward","down":
 curl -H "$H" -d '{"action":"baritone.goto","parameters":{"x":100,"z":-40}}' localhost:25580/api/v1/actions/execute
 curl -H "$H" localhost:25580/api/v1/resources/baritone.status
 curl -H "$H" -N localhost:25580/api/v1/events/stream?types=baritone.path_event
+curl -H "$H" -d '{"action":"worldedit.set_blocks","parameters":{"x1":0,"y1":64,"z1":0,"x2":4,"y2":64,"z2":4,"pattern":"stone"}}' localhost:25580/api/v1/actions/execute
+curl -H "$H" localhost:25580/api/v1/resources/worldedit.selection
 ```
 
 - Reads: `GET /api/v1/resources/{id}` → `{success, resource, availability, source, observedTick, value}`.
@@ -50,6 +53,11 @@ curl -H "$H" -N localhost:25580/api/v1/events/stream?types=baritone.path_event
 - Game state: blocks and block entities (`world.block`, `world.blocks`, `world.block_entities`), loaded chunks, nearby entities and players, your inventory and the open container, and chat history; `GET /api/v1/resources` lists everything with descriptions and parameters.
 - Discovery: `/resources`, `/actions`, `/events`, `/capabilities`, `/mods`, `/schema`, `/openapi.json`.
 - Data the client can't legitimately have is returned as `{"available": false, "reason": "SERVER_ONLY", ...}`, never invented.
+
+WorldEdit operations (`worldedit.*`, with WorldEdit 7.3.8 installed) use its typed Java API only, never its commands,
+as your own player on your integrated server - singleplayer or a LAN world you host. They keep WorldEdit's own
+selection, clipboard, undo history and permission nodes, are capped by `maxEditVolume`, and read and write schematics
+only by bare file name in WorldEdit's schematics folder (`config/worldedit/schematics`); see `docs/worldedit-coverage.md`.
 
 Baritone actions use its typed Java API only (reflection, optional dependency); its command manager is never used.
 If the installed build lacks a call, the action fails with `501 UNSUPPORTED` rather than guessing. Path events

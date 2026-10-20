@@ -9,6 +9,8 @@ import net.minecraft.server.MinecraftServer;
  * Runs tasks on the dedicated server's main thread via {@link MinecraftServer#execute}. Mirrors
  * {@code MinecraftGameThread}'s pattern exactly, but references no {@code net.minecraft.client.*}
  * class -- {@link MinecraftServer} is common code, present and safe to load on a dedicated server.
+ * Works for any {@link MinecraftServer}: the client's WorldEdit calls use it to reach the integrated
+ * server's thread (see {@code ClientWorldEdit}).
  */
 final class DedicatedServerGameThread implements GameThread {
     private final MinecraftServer server;

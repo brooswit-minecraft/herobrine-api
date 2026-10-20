@@ -24,7 +24,8 @@ The only state the API keeps is the two token hashes, SSE subscriber queues, and
 | Provider SPI | `ResourceProvider`, `ApiRegistrar` | namespaced `modid.*` | `modid.*` | — | client | Tested | — |
 | Event stream | `EventBus` | `/events`, `/events/stream` (SSE, `?types=`) | — | declared types | client | Tested | No WebSocket; few producers (see Baritone) |
 | Baritone adapter | `BaritoneAdapter`, `ReflectiveBaritone` | — | typed process / builder / settings / waypoint calls | path events | client | Tested against fakes of the API | Names/signatures from memory, unverified against a real build; no command-manager fallback |
-| WorldEdit adapter | `WorldEditAdapter`, `ReflectiveWorldEdit` | — | typed edit / history / clipboard / schematic / selection / transform / generation calls (cuboid, cylinder, polygon, ellipsoid and convex-hull regions) | — | client | Tested against fakes of the API | Verified against real WorldEdit 7.3.8 sources (not from memory) - see docs/worldedit-coverage.md for the full version-qualified matrix and gaps; contract only, no neoforge wiring or actor/world construction yet (MINECRAFT-476) |
+| WorldEdit adapter | `WorldEditAdapter`, `ReflectiveWorldEdit` | — | typed edit / history / clipboard / schematic / selection / transform / generation calls (cuboid, cylinder, polygon, ellipsoid and convex-hull regions) | — | client | Tested against fakes of the API; every reflected name resolved against the real 7.3.8 jars in CI (`WorldEditProvenanceTest`) | Verified against real WorldEdit 7.3.8 sources (not from memory) - see docs/worldedit-coverage.md for the full version-qualified matrix and gaps |
+| WorldEdit binding | `WorldEditBinding`, `WorldEditActions`, `ActorScope`, `SchematicFiles`, `GameThreadHop` | the selection reporters (`worldedit.selection`, `worldedit.*_selection`) | every other `worldedit.*` operation | — | client + server | Tested (through `ApiServer` with real tokens, the real adapter against fakes, and a client-shaped thread hop) | Each operation checks the WorldEdit permission node its own command checks; writes need the full token; edits, copies and pastes capped by `maxEditVolume`; schematics confined to WorldEdit's schematics folder (MINECRAFT-476) |
 
 ## Minecraft client (neoforge module — all Draft)
 
@@ -44,6 +45,7 @@ The only state the API keeps is the two token hashes, SSE subscriber queues, and
 | Mods | `ModList`, `IModInfo` | `/mods`, `mods.detail` | — | — | LOCAL | Draft | No config; commands/keybindings not attributed to mods |
 | Commands | `ClientPacketListener#getCommands` | `commands.known` | — | — | SERVER_SYNCED | Draft | Root names only |
 | Runtime toggle | `ApiController`, `ClientConfig`, `/herobrine_api` | — | `on` / `off` / `status` / `regenerate` | — | LOCAL | Draft | Multiplayer detection uses `hasSingleplayerServer()`; no on-screen indicator |
+| WorldEdit | `ClientWorldEdit`; actor `NeoForgeAdapter.adaptPlayer` (WorldEdit's own) of the integrated server's `ServerPlayer` | `worldedit.selection`, `worldedit.*_selection` | all other `worldedit.*` operations, as your own player | — | LOCAL | Draft | Singleplayer or a LAN world you host only (409 on someone else's server); requests hop from the client thread to the integrated server's thread; see docs/worldedit-coverage.md |
 | Baritone | typed API only, via `BaritoneAdapter` (command manager never used) | `baritone.status`, `baritone.path`, `baritone.settings`, `baritone.waypoints`, `baritone.find`, `baritone.schematics` (names only) | see table below | `baritone.path_event` | LOCAL | Draft | Every API name/signature is from memory and unverified; a missing call returns 501; path cost not exposed; no cylinders |
 
 ### Baritone: typed API call behind each action (all from memory, unverified)
@@ -81,6 +83,7 @@ exposed: `click` (needs a mouse), file commands (`explorefilter`, `saveall`, `re
 | Auth | `Tokens.loadOrCreateSingle(SecretAccessor)`, `ServerApiKeyAccessor` | — | — | — | server | Tested (core: generic accessor + locking; neoforge: real end-to-end `runServer` run) | One FULL-only key stored as the `apiKey` field inside `serverconfig/herobrine_api-server.toml` itself (not a separate file); no read/write split server-side |
 | Honest capability reporting | `ApiContext.client = false` | `/capabilities` | — | — | server | Tested (core) | Client-only resources/actions are not registered at all server-side, rather than registered-and-broken |
 | Minimal server resources | `ServerBindings` | `server.info`, `server.players` | — | — | server | Draft | Deliberately minimal; proves the lifecycle, not a server game-data inventory (out of scope here) |
+| WorldEdit | `WorldEditBindings`; actor `NeoForgeAdapter.adaptPlayer` of a named online `ServerPlayer` | `worldedit.selection`, `worldedit.*_selection` (`?player=`) | all other `worldedit.*` operations (required `player`) | — | server | Draft | Acts inside that player's WorldEdit session, world and permissions; runs on the server thread; capped by the server's `maxEditVolume` (MINECRAFT-476) |
 
 ## Not started (spec reference)
 - §4.8: living-entity AI (server-only); item/recipe definitions beyond what a stack carries
@@ -94,4 +97,4 @@ exposed: `click` (needs a mouse), file commands (`explorefilter`, `saveall`, `re
 ## Known open questions
 - Everything in `neoforge/` is unproven at runtime: only compilation is verified.
 - Whether `jdk.httpserver` is available on NeoForge's module path (reviewer concern; test in a real client).
-- Whether Baritone's classes are visible from this mod's classloader.
+- Whether Baritone's classes are visible from this mod's classloader; the same for WorldEdit's (MINECRAFT-477).

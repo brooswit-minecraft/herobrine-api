@@ -1,10 +1,11 @@
 # WorldEdit adapter: version and method coverage
 
-Companion to the "WorldEdit adapter" row in `docs/COVERAGE.md` (spec §17). Scope: MINECRAFT-474 defines the
-typed contract (`WorldEditAdapter`) and a reflective implementation (`ReflectiveWorldEdit`) with verified
-signatures, absence detection and version-compatibility detection. It deliberately does **not** wire this
-into the neoforge module, the HTTP action/resource registry, or actor/world construction from a real
-Minecraft player - that is MINECRAFT-476 ("Implement direct WorldEdit API bindings and actor context").
+Companion to the "WorldEdit adapter" row in `docs/COVERAGE.md` (spec §17). MINECRAFT-474 defined the typed
+contract (`WorldEditAdapter`) and a reflective implementation (`ReflectiveWorldEdit`) with verified signatures,
+absence detection and version-compatibility detection. MINECRAFT-476 binds it: every operation is an HTTP
+action or resource, acting as a real WorldEdit actor built from a Minecraft player, on the server thread - see
+[HTTP binding and actor context](#minecraft-476-http-binding-and-actor-context) below. Running it in a real
+game with WorldEdit installed is MINECRAFT-477.
 
 ## Verified version
 
@@ -20,12 +21,19 @@ Minecraft player - that is MINECRAFT-476 ("Implement direct WorldEdit API bindin
   pin - it is the newest WorldEdit build that actually supports this repo's exact Minecraft/NeoForge version.
   A future bump of this repo's NeoForge version past 1.21.1 should re-run this check rather than assume the
   next WorldEdit release still applies.
-- `ReflectiveWorldEdit` enforces this at runtime: `WorldEdit.getVersion()` must equal `"7.3.8"` exactly, or
-  match it with WorldEdit's own build-metadata suffix (e.g. `"7.3.8+1379-7d32b45"`, verified:
-  `WorldEdit.getVersion()` reads this from `WorldEditManifest`), or every adapter call fails fast with
+- `ReflectiveWorldEdit` enforces this at runtime: the version must equal `"7.3.8"` exactly, or match it with a
+  build-metadata suffix (e.g. `"7.3.8+1379-7d32b45"`), or every adapter call fails fast with
   `501 UNSUPPORTED` naming the installed version. An earlier draft matched any `"7.3."`-prefixed version,
   which would have silently accepted an unverified `7.3.9` (or `7.3.80`, etc.) instead of rejecting it - only
   the one release actually verified here is accepted.
+- Where the version comes from (MINECRAFT-476): `WorldEdit.getVersion()` reads the `WorldEdit-Version`
+  attribute from the manifest of the jar holding `WorldEditManifest` (the NeoForge build declares `7.3.8`
+  there, checked in the published `worldedit-neoforge-mc1.21-7.3.8.jar`). That lookup only understands a
+  `jar:` class URL (`WorldEditManifest.java:70`) and otherwise reports `"(unknown)"` (`:61`), and NeoForge's
+  module class loader (securejarhandler 3.0.8 in this build) serves classes from `union:` URLs. So when
+  WorldEdit reports `"(unknown)"` the adapter falls back to the version WorldEdit declares to the loader -
+  its `mods.toml` version, `7.3.8+1379-7d32b45`, read through NeoForge's `ModList`. A version WorldEdit does
+  report is never overridden.
 
 ## Coverage matrix (`WorldEditAdapter` / `ReflectiveWorldEdit`)
 
@@ -47,11 +55,11 @@ from general WorldEdit knowledge. Status for everything here is **Tested against
 | Clipboard | `copy` overloaded for `Box`, `Cylinder`, `Polygon`, `Ellipsoid`, `ConvexHull` | One shared `copyRegion` helper: `BlockArrayClipboard(region)` + `clipboard.setOrigin(region.getMinimumPoint())` + `ForwardExtentCopy(source, region, destination, region.getMinimumPoint())` + `Operations.completeLegacy` + `session.setClipboard(new ClipboardHolder(...))` | Origin is always the region's own bounding-box minimum corner - a fixed, typed input, consistent across every shape - not `session.getPlacementPosition(actor)` (WorldEdit's own `/copy` command default, which depends on hidden per-actor placement state); matches this repo's "1-to-1, no hidden defaults" design rule, and keeps `copy` fully self-contained (no placement setup needed first) |
 | Transforms | `rotateClipboard(actor, degreesY, degreesX, degreesZ)` | `AffineTransform` (fresh instance) → `rotateY(-degreesY)` → `rotateX(-degreesX)` → `rotateZ(-degreesZ)` → `existingTransform.combine(newTransform)` → `ClipboardHolder.setTransform` | Mirrors WorldEdit's own `/rotate` command exactly (verified: `command/ClipboardCommands.java:233-238`, including the angle negation that makes a positive input angle read as clockwise); non-destructive and stackable, takes effect on the next `paste`, not past ones |
 | Transforms | `scaleClipboard(actor, sx, sy, sz)` | `AffineTransform.scale(sx, sy, sz)` → `existingTransform.combine(newTransform)` → `ClipboardHolder.setTransform` | Generalizes WorldEdit's own `/flip` command mechanism (verified: `command/ClipboardCommands.java:253-254`, which calls the same `scale` with +/-1 factors) to arbitrary per-axis factors |
-| Masks / patterns | pattern & mask string parameters on edit methods | `PatternFactory`/`MaskFactory extends AbstractFactory<E>.parseFromInput(String, ParserContext)` | Reuses WorldEdit's own parser/grammar instead of a parallel one; malformed input surfaces as `400 BAD_REQUEST`, not a crash |
+| Masks / patterns | pattern & mask string parameters on edit methods | `PatternFactory`/`MaskFactory extends AbstractFactory<E>.parseFromInput(String, ParserContext)` | Reuses WorldEdit's own parser/grammar instead of a parallel one; malformed input surfaces as `400 BAD_REQUEST` carrying WorldEdit's own reason, not a crash. The `ParserContext` (since MINECRAFT-476's review) is built as WorldEdit's own argument converter builds it (`FactoryConverter.createContext`, `FactoryConverter.java:99-123`), one per argument: `setActor`, `setWorld`, `setExtent`, `setSession` with the actor's own `LocalSession`, `setRestricted(true)`. Parsers read all of these: `#clipboard`/`#copy` take `requireSession()`'s clipboard (`ClipboardPatternParser`), `#region`/`#selection`/`#sel` take `requireSession().getSelection(requireWorld())` (`RegionMaskParser`), and every block or extent-backed mask - `stone,dirt` included - needs `requireExtent()` (`BlocksMaskParser.java:58`, `ExistingMaskParser`, ...). The 474 adapter set only the actor, so all of those failed with `400`. Two choices keep the parse consistent with the operation: the world is the operation's editing world (world override first, as the edit and the selection reporters use; `FactoryConverter` prefers a player's own world here), and the extent is the operation's own `EditSession` - what `FactoryConverter`'s `RequestExtent` resolves to through WorldEdit's thread-local command request, which this API does not open - so the edit session now opens before the pattern or mask is parsed |
 | Clipboard | `paste(actor, x, y, z)` / `paste(actor, x, y, z, ignoreAirBlocks, ignoreStructureVoidBlocks, copyEntities, copyBiomes)` | `ClipboardHolder.createPaste(Extent).to(BlockVector3).ignoreAirBlocks(..).ignoreStructureVoidBlocks(..).copyEntities(..).copyBiomes(..).build()` + `Operations.completeLegacy` | Destination is an explicit typed x,y,z (not WorldEdit's placement-position heuristic either), same "no hidden defaults" rule as `copy`. The 3-arg overload uses WorldEdit's own `PasteBuilder` field defaults verified at `session/PasteBuilder.java:47-51`: `ignoreAirBlocks=false`, `ignoreStructureVoidBlocks=false`, `copyEntities=true`, `copyBiomes=false` |
-| Schematics | `saveSchematic(actor, file)` / `loadSchematic(actor, file)` | `ClipboardFormats.findByFile(File)` (content detection, existing files only) falling back to `ClipboardFormats.findByAlias(extension)` (verified: `BuiltInClipboardFormat.SPONGE_V3_SCHEMATIC` registers `"schem"` as both its primary extension and an alias, `BuiltInClipboardFormat.java:135`) + `ClipboardFormat.getWriter`/`getReader` | `findByFile` alone (the first draft of this adapter) is wrong for saves: it opens and sniffs the file's *existing* content, which a new output file never has, so it always returned `null` and rejected every save. Format is now inferred from the file extension for a file that doesn't exist yet, with content-sniffing preferred when it does; an unrecognized extension is `400`, not a silent fallback |
-| History | `undo(actor)` / `redo(actor)` | `LocalSession.undo(BlockBag, Actor)` / `redo(...)` | Reuses WorldEdit's own per-actor history (`LocalSession`), not a separate undo queue |
-| Selection | `selection(actor)` | `LocalSession.getSelection(World)` → `Region.getMinimumPoint()`/`getMaximumPoint()` | Reports the **bounding box** of the active selection for any selector shape |
+| Schematics | `saveSchematic(actor, file)` / `loadSchematic(actor, file)` | `ClipboardFormats.findByFile(File)` (content detection, existing files only) falling back to `ClipboardFormats.findByAlias(extension)` (verified: `BuiltInClipboardFormat.SPONGE_V3_SCHEMATIC` registers `"schem"` as both its primary extension and an alias, `BuiltInClipboardFormat.java:135`) + `ClipboardFormat.getWriter`/`getReader`; a save writes `Clipboard.transform(holder.getTransform())`, the clipboard with its pending rotate/scale baked in, as `//schem save` does (`SchematicCommands.java:372-375`; until MINECRAFT-476 the untransformed clipboard was saved) | `findByFile` alone (the first draft of this adapter) is wrong for saves: it opens and sniffs the file's *existing* content, which a new output file never has, so it always returned `null` and rejected every save. Format is now inferred from the file extension for a file that doesn't exist yet, with content-sniffing preferred when it does; an unrecognized extension is `400`, not a silent fallback |
+| History | `undo(actor)` / `redo(actor)` | `LocalSession.undo(BlockBag, Actor)` / `redo(...)`, then `WorldEdit.flushBlockBag(Actor, EditSession)` | Reuses WorldEdit's own per-actor history (`LocalSession`), not a separate undo queue. Since MINECRAFT-476 it passes the session's block bag for a player actor (`LocalSession.getBlockBag(Player)`, null unless the session uses the inventory) and flushes it after a step that did something - exactly `HistoryCommands.undo`/`redo` (`HistoryCommands.java:80-84`, `:119-123`); the first draft always passed `null` |
+| Selection | `selection(actor)` | `LocalSession.getSelection(World)` → `Region.getMinimumPoint()`/`getMaximumPoint()` | Reports the **bounding box** of the active selection for any selector shape. The `World` is the one the actor is editing - the session's world override (`hasWorldOverride`/`getWorldOverride`), else the actor's own (`Locatable.getExtent()`) - which is how WorldEdit's own commands inject `@Selection Region` (`PlatformCommandManager.java:238-282`). Until MINECRAFT-476 it used `getSelectionWorld()`, the selection's *own* world, and so reported a selection made in another dimension as if it were current; it is now `400` like `//size`. The four exact-shape selection reporters below share this |
 | Selection | `cylinderSelection(actor)` | `CylinderRegion.getCenter()`/`getRadius()`/`getMinimumY()`/`getMaximumY()`, when the real selector is exactly a `CylinderRegion` | Reports the **exact** shape (not just bounding box); `400` if the selector is a different (or no) shape |
 | Selection | `polygonSelection(actor)` | `Polygonal2DRegion.getPoints()` (`List<BlockVector2>`) + `getMinimumY()`/`getMaximumY()`, when the real selector is exactly a `Polygonal2DRegion` | Exact point list + Y-range; `400` if the selector is a different (or no) shape |
 | Selection | `ellipsoidSelection(actor)` | `EllipsoidRegion.getCenter()`/`getRadius()`, when the real selector is exactly an `EllipsoidRegion` | `400` if the selector is a different (or no) shape |
@@ -67,10 +75,10 @@ from general WorldEdit knowledge. Status for everything here is **Tested against
 
 `core/src/main/java/dev/herobrine/api/core/worldedit/WorldEditSchema.java` declares the typed, namespaced
 (`worldedit.*`) operation inventory - name, description and a `ParamDef` list per `WorldEditAdapter` method,
-built from this repo's existing schema types (`dev.herobrine.api.core.ParamDef`) so MINECRAFT-476 can attach
-real `ActionDef`/`ResourceDef` handlers to an already-typed parameter schema instead of re-deriving one. It is
-declarative data only: no `Function<Params, Object> handler`, no `ApiContext`/HTTP registration - building a
-real `ActionDef` needs a concrete platform `Actor`, which only the neoforge module can construct (MINECRAFT-476).
+built from this repo's existing schema types (`dev.herobrine.api.core.ParamDef`). It stays declarative data;
+MINECRAFT-476 registers exactly these definitions as the HTTP actions/resources (`WorldEditBinding`), with
+`WorldEditActions` holding each operation's handler, read/write kind and permission nodes. Its only 476 change
+is `save_schematic`'s optional `overwrite` (default `false`).
 
 ## Gaps - explicit, not silently dropped, and split by why they're gaps
 
@@ -97,23 +105,136 @@ public and meaningfully constructible outside of an existing selection during th
   triggered brush strokes): all built around an interactive play loop (equip a tool, click a block, repeat) or
   an admin snapshot/rollback workflow; no one-shot, non-command, non-interactive public API equivalent was
   found that fits a single typed call the way `setBlocks` or `rotateClipboard` do.
-- **Actor construction**: `Actor` is only an opaque `Object` parameter here - the adapter never constructs
-  one. `LocalSession.createEditSession(Actor)` (which this adapter does call) additionally checks whether the
-  actor implements `Locatable` to resolve a world override; whether MINECRAFT-476's eventual actor wrapper
-  satisfies `Locatable` is still the open question below. Wrapping a Minecraft `ServerPlayer`/`LocalPlayer`
-  into a real WorldEdit `Actor` requires the neoforge module's own platform registration; that is
-  MINECRAFT-476, not this ticket.
-- **World construction**: likewise, `com.sk89q.worldedit.world.World` instances (needed internally by
-  `LocalSession.getSelection(World)`) are only ever read back from the actor's own session state here, never
-  constructed by this adapter - another MINECRAFT-476 dependency.
 - **Command-based fallback**: deliberately never used, per the ticket (WorldEdit's command dispatcher is
   bypassed entirely, matching the Baritone adapter's own rule).
 
-## Known open question
-- Whether `com.sk89q.worldedit.extension.platform.Actor` instances built by the neoforge module in
-  MINECRAFT-476 will also satisfy `Locatable`. This is now a soft dependency, not a hard one: this adapter
-  calls `LocalSession.createEditSession(Actor)` (not the `newEditSession(A extends Actor & Locatable)`
-  shorthand the first draft used), which only does a runtime `actor instanceof Locatable` check to resolve a
-  world override (`LocalSession.java:1106`) - a non-`Locatable` actor still works, it just can't supply a
-  world override this way. The real WorldEdit neoforge platform almost certainly supplies `Locatable`, but it
-  was not verified here since no neoforge-side actor wrapper exists yet.
+Actor and world construction, listed here as MINECRAFT-476 dependencies before, are done - see the next
+section. The former open question is settled: the actor is WorldEdit's own `NeoForgePlayer`, which extends
+`AbstractPlayerActor` and so is a `Player` (`Entity`, hence `Locatable`) - checked in the 7.3.8 jar and pinned
+by `WorldEditProvenanceTest`.
+
+## MINECRAFT-476: HTTP binding and actor context
+
+Every `WorldEditSchema` operation is registered by `WorldEditBinding` (core) through `WorldEditActions`
+(core: permission check, input bounds, translation) onto the adapter above, with the platform resolving who the
+request acts as (`ActorScope`) - `WorldEditBindings` and `ClientWorldEdit` in the neoforge module. Nothing here
+adds a queue, a session or any other state: selection, clipboard and history are the actor's own WorldEdit
+`LocalSession`, and each call is one WorldEdit call. WorldEdit's command dispatcher, command strings and
+console are never used.
+
+### Actor and world
+
+| | Client | Dedicated server |
+|---|---|---|
+| Acts as | the client's own player: the integrated server's `ServerPlayer` with the same UUID | the online player named by the required `player` parameter (an operator acting inside that player's session, as `/execute as <player>` with a WorldEdit command would) |
+| WorldEdit actor | `NeoForgeAdapter.adaptPlayer(ServerPlayer)` - WorldEdit's own wrapper, the call its `NeoForgeWorldEdit.getSession(ServerPlayer)` makes; a `NeoForgePlayer`, built per request, never cached | same |
+| Session | that player's `LocalSession` (`SessionManager.get`, keyed by the player's UUID), so players never share a selection, clipboard or history | same |
+| World | the session's world override, else the player's level - how WorldEdit's own commands pick it | same |
+| Thread | the request runs on the client thread and hops to the integrated server's thread (`GameThreadHop`): not started within `SERVER_START_TIMEOUT_MS` (5 s) it is withdrawn and refused (503, nothing was done); once started it is waited for, up to `SERVER_FINISH_TIMEOUT_MS` (60 s) | the request already runs on the server thread, so the call runs inline |
+| Unavailable (409) | not in a world; connected to someone else's server - WorldEdit there belongs to that server and is reachable only through its commands, which this API does not send | the named player is not online |
+| Tokens | actions need the full token (the read-only token gets 403); the selection resources are readable with either | the operator key |
+| Control gating | actions are refused on a remote server unless `allowControlOnMultiplayer` (and are unavailable there anyway) | none, as for every server action |
+| Edit cap | `maxEditVolume` in `herobrine_api-client.toml` | `maxEditVolume` in `herobrine_api-server.toml` |
+
+### Operations
+
+All are named `worldedit.<operation>`. The permission column lists the nodes WorldEdit 7.3.8's own command for
+the same operation checks (its `@CommandPermissions`); as in WorldEdit, holding any one is enough
+(`PermissionCondition.satisfied`). WorldEdit checks permissions only in its command layer, so the binding checks
+them itself (`Subject.hasPermission`) before anything runs - an API caller gets no further than the player could
+with WorldEdit commands.
+
+| Operations | Served as | Adapter call | WorldEdit permission (command) | Capped by `maxEditVolume` |
+|---|---|---|---|---|
+| `set_blocks`, `set_blocks_cylinder`, `set_blocks_polygon`, `set_blocks_ellipsoid`, `set_blocks_convex_hull` | action | `setBlocks(actor, shape, pattern)` | `worldedit.region.set` (`//set`) | the shape's bounding box |
+| `replace_blocks`, `replace_blocks_cylinder`, `replace_blocks_polygon`, `replace_blocks_ellipsoid`, `replace_blocks_convex_hull` | action | `replaceBlocks(actor, shape, mask, pattern)` | `worldedit.region.replace` (`//replace`) | the shape's bounding box |
+| `copy`, `copy_cylinder`, `copy_polygon`, `copy_ellipsoid`, `copy_convex_hull` | action | `copy(actor, shape)` | `worldedit.clipboard.copy` (`//copy`) | the shape's bounding box |
+| `paste` | action | `paste(actor, x, y, z, ignoreAirBlocks, ignoreStructureVoidBlocks, copyEntities, copyBiomes)`, flags defaulting to WorldEdit's `PasteBuilder` defaults | `worldedit.clipboard.paste` (`//paste`) | the clipboard's region volume (`clipboardVolume`: `Region.getVolume()`), however the clipboard was filled |
+| `undo`, `redo` | action | `undo(actor)`, `redo(actor)` - one step per call | `worldedit.history.undo` or `worldedit.history.undo.self` (`undo`); `worldedit.history.redo` or `worldedit.history.redo.self` (`redo`) | - (replays an edit that was capped) |
+| `rotate_clipboard` | action | `rotateClipboard(actor, degreesY, degreesX, degreesZ)` | `worldedit.clipboard.rotate` (`//rotate`) | - |
+| `scale_clipboard` | action | `scaleClipboard(actor, sx, sy, sz)` | `worldedit.clipboard.flip` (`//flip`, which it generalizes) | - |
+| `save_schematic` | action | `saveSchematic(actor, file)` | `worldedit.clipboard.save` or `worldedit.schematic.save` (`//schem save`); replacing an existing file also needs `worldedit.schematic.delete` and `overwrite: true` (its `-f`), checked in that order as `SchematicCommands.save` does (`SchematicCommands.java:168-176`) | - |
+| `load_schematic` | action | `loadSchematic(actor, file)` | `worldedit.clipboard.load` or `worldedit.schematic.load` (`//schem load`) | - (the paste is) |
+| `make_sphere`, `make_cylinder`, `make_pyramid` | action | `makeSphere`, `makeCylinder`, `makePyramid` (each first checks WorldEdit's own `maxRadius`) | `worldedit.generation.sphere` (`//sphere`), `worldedit.generation.cylinder` (`//cyl`), `worldedit.generation.pyramid` (`//pyramid`) | the generated footprint |
+| `hollow_out_box` | action | `hollowOutBox(actor, box, thickness, pattern)` | `worldedit.region.hollow` (`//hollow`) | the outer box |
+| `selection`, `cylinder_selection`, `polygon_selection`, `ellipsoid_selection`, `convex_hull_selection` | resource | `selection(actor)`, ... | `worldedit.selection.size` (`//size`) | - |
+
+Actions return what the call returned: `{changed}` for edits and generation, `{copied}`, `{pasted}`,
+`{undone}`/`{redone}` (false when there was nothing to undo or redo), `{rotated}`, `{scaled}`,
+`{saved, file}`, `{loaded, file}`. The resources return the selection in the adapter's typed shape.
+
+**Bounding boxes never under-restrict.** A cylinder or ellipsoid region reaches `floor(r + 0.5)` blocks from
+its center (`setRadius` adds 0.5), and the generated sphere and cylinder do the same; the cap uses `ceil(r)`,
+which always covers it. `makeCylinder` fills `y .. y+height-1` (or the `|height|` blocks below `y`) and the cap
+uses `y .. y+height`; `makePyramid` reaches `size-1` out and `size` up (`EditSession.java:1975`) and the cap
+uses `±size`. A box volume is computed overflow-checked: a world-sized box's block count does not fit a `long`,
+and the unchecked product used to wrap around to a value that could pass (fixed in `Validation.boxVolume`, which
+the Baritone edits share).
+
+### Input bounds
+
+Named constants, in `WorldEditActions` unless noted:
+
+| Input | Bound |
+|---|---|
+| block coordinates | within ±30,000,000 (`Validation.coordinate`, `Validation.boxVolume`) |
+| `points` of a polygon, `vertices` of a convex hull | at most `MAX_SHAPE_POINTS` (256) entries - WorldEdit tests every block of the region against each - each an object of JSON numbers |
+| `pattern`, `mask` | 1 to `MAX_PATTERN_LENGTH` (256) characters, no control characters; parsed by WorldEdit's own factories |
+| radii | finite and not negative |
+| `size` (pyramid) | not negative |
+| rotation angles | finite |
+| scale factors | finite, not zero (a singular transform) and at most `MAX_SCALE_FACTOR` (16) in magnitude |
+| `file` | a bare file name with a known extension (`Validation.schematicName`, as for `baritone.build`) |
+
+### Schematics
+
+Files are read and written only in WorldEdit's own schematics folder: its configured `saveDir` resolved by
+`WorldEdit.getWorkingDirectoryPath` (`config/worldedit/schematics` by default), the folder `//schem save` and
+`//schem load` use, so files saved here are the ones players see in game and vice versa. `SchematicFiles`
+resolves the bare name against the folder's real path and refuses anything there that is not a plain regular
+file - a symbolic link, which could point outside, or a directory. A save creates the folder if needed; a load of
+a missing file is 404.
+
+### Errors
+
+| Situation | Response |
+|---|---|
+| read-only token on an action | 403 `PERMISSION_DENIED` (`ApiServer`) |
+| the actor lacks the operation's WorldEdit permission | 403 `PERMISSION_DENIED` naming the nodes |
+| WorldEdit not installed | actions 409 `ACTION_UNAVAILABLE`; resources `{available: false, reason: MOD_NOT_INSTALLED}`; `/capabilities` reports `integrations.worldedit: false`; everything stays listed |
+| a WorldEdit version other than 7.3.8 | 501 `UNSUPPORTED` |
+| no complete selection in the world being edited, including one made in another world | 400 |
+| empty clipboard (paste, rotate, scale, save) | 400 |
+| the actor is not in a world | 400 |
+| the world WorldEdit is editing was unloaded (`NeoForgeWorld.getWorld()`'s `RuntimeException`) | 409 |
+| over `maxEditVolume` | 400, before any WorldEdit call |
+| over WorldEdit's configured `maxRadius` (`MaxRadiusException`) | 400, before the edit |
+| over the session's block change limit (`MaxChangedBlocksException`) | 400 naming the limit: the changes made up to it stay applied and are remembered, so `worldedit.undo` reverts them (also for `paste`, which used to be a 500 here) |
+| a pattern or mask WorldEdit cannot parse, or one that needs what the actor lacks (`#clipboard` with an empty clipboard, `#region` with no selection in the world being edited) | 400 with WorldEdit's reason |
+| a bad schematic name, a link or a non-regular file | 400; a missing file on load 404; an existing file on save 403 without `worldedit.schematic.delete`, else 400 without `overwrite` |
+| request not started by the integrated server in time (client) | 503 `GAME_THREAD_BUSY`, nothing was done |
+
+### Provenance
+
+`WorldEditProvenanceTest` (neoforge tests) resolves every WorldEdit class, method, constructor and field that
+`ReflectiveWorldEdit` and `WorldEditBindings` reach by reflection - by exact signature and return type -
+against the real `com.sk89q.worldedit:worldedit-neoforge-mc1.21:7.3.8` and its `worldedit-core`, fetched from
+`maven.enginehub.org` onto the **test classpath only** (the mod neither compiles against nor bundles WorldEdit). It also runs, on the real classes, what needs no running platform: the production
+`WorldEditBindings.actor` lookup reaching the real `NeoForgeAdapter.adaptPlayer`, `Polygonal2DRegion`'s atomic
+Y bounds, `ConvexPolyhedralRegion`'s triangle count for a flat versus a real hull, and `Region.getVolume()`.
+`WorldEditParserContextTest` (same classpath) feeds the production `ParserContext` to WorldEdit's own
+`ClipboardPatternParser`, `RegionMaskParser` and `ExistingMaskParser`, with real `LocalSession`s, selections,
+clipboards and worlds: each player's `#clipboard` and `#region` resolve that player's own clipboard and selection,
+a selection made in another world is refused unless the world override points there, and extent-backed masks
+test blocks against the operation's `EditSession`.
+
+### Remaining gaps
+
+- **Never run in a real game with WorldEdit installed** - that is MINECRAFT-477. In particular unproven at
+  runtime: that WorldEdit's classes are visible from this mod's class loader (the same open question as
+  Baritone), the `union:`-URL version fallback above, WorldEdit's NeoForge permission provider, and real edits.
+- Not exposed, as before: snapshots, CraftScripts, tools and brushes (see the gaps above); `undo`/`redo` take
+  one step per call (`LocalSession.undo`/`redo` are one step; WorldEdit's `times` argument is its command's loop).
+- No console actor on the dedicated server: a console has no world, and giving it one means setting a hidden
+  session world override, so the server acts as a named online player instead.
+- From the client, only the client's own integrated server is reachable; another server's WorldEdit is not.

@@ -1,6 +1,7 @@
 package dev.herobrine.api.core.worldedit;
 
 import java.io.File;
+import java.nio.file.Path;
 import java.util.List;
 
 /**
@@ -11,7 +12,9 @@ import java.util.List;
  * API call or is an incompatible version, {@code ACTION_UNAVAILABLE} (409) when WorldEdit is absent.
  * WorldEdit's command dispatcher is deliberately not used; every call maps directly to a WorldEdit Java
  * API method. {@code actor} is an opaque WorldEdit {@code Actor} (also {@code Locatable}) instance; only
- * the platform module can construct one (wrapping a Minecraft player) - see MINECRAFT-476.
+ * the platform module can construct one - the neoforge module wraps a {@code ServerPlayer} with WorldEdit's
+ * own {@code NeoForgeAdapter.adaptPlayer} (MINECRAFT-476). Calls must run on the thread that owns the
+ * actor's world (the server thread).
  */
 public interface WorldEditAdapter {
     /** Inclusive axis-aligned box between two corners, in any order; maps to a WorldEdit {@code CuboidRegion}. */
@@ -27,6 +30,28 @@ public interface WorldEditAdapter {
     boolean installed();
     /** WorldEdit's self-reported version string (e.g. "7.3.8+1379-7d32b45"), or null if absent. */
     String version();
+
+    // ---- actor context (MINECRAFT-476) ----
+
+    /**
+     * Whether the actor holds a WorldEdit permission node: {@code Subject#hasPermission(String)}, the same
+     * check WorldEdit's own commands make for their {@code @CommandPermissions} nodes.
+     */
+    boolean hasPermission(Object actor, String permission);
+
+    /**
+     * WorldEdit's own schematics directory - its configured {@code LocalConfiguration#saveDir} resolved by
+     * {@code WorldEdit#getWorkingDirectoryPath(String)}, the directory {@code //schem save} and
+     * {@code //schem load} use. Absolute and normalized; it may not exist yet.
+     */
+    Path schematicsDirectory();
+
+    /**
+     * Volume in blocks of the actor's clipboard region ({@code Region#getVolume()}) - the most blocks a
+     * {@link #paste} of it can write.
+     * @throws dev.herobrine.api.core.ApiException BAD_REQUEST if the clipboard is empty
+     */
+    long clipboardVolume(Object actor);
 
     // ---- edits (actor-scoped: each opens an EditSession tied to the actor's LocalSession, applies the
     // change, records it in the session's undo history, then closes the session) ----
@@ -45,9 +70,13 @@ public interface WorldEditAdapter {
 
     // ---- history (WorldEdit-owned, per actor LocalSession; no separate queue of our own) ----
 
-    /** @return whether an edit was undone */
+    /**
+     * Undoes the actor's last remembered edit, the way WorldEdit's own {@code //undo} does: with the
+     * session's block bag for a player actor, flushed afterwards.
+     * @return whether an edit was undone
+     */
     boolean undo(Object actor);
-    /** @return whether an edit was redone */
+    /** Redoes the actor's last undone edit, like {@link #undo}. @return whether an edit was redone */
     boolean redo(Object actor);
 
     // ---- clipboard / schematics (the actor's WorldEdit clipboard; one per LocalSession, like the game) ----
@@ -56,7 +85,11 @@ public interface WorldEditAdapter {
     void copy(Object actor, Box box);
     /** Pastes the actor's clipboard with its origin at x,y,z. */
     void paste(Object actor, int x, int y, int z);
-    /** Writes the actor's clipboard to a schematic file; format is inferred from the file extension. */
+    /**
+     * Writes the actor's clipboard, with its pending rotate/scale transform baked in ({@code
+     * Clipboard#transform}, as {@code //schem save} does), to a schematic file; format is inferred from the
+     * file extension.
+     */
     void saveSchematic(Object actor, File file);
     /** Reads a schematic file into the actor's clipboard; format is inferred from the file extension. */
     void loadSchematic(Object actor, File file);
@@ -64,8 +97,11 @@ public interface WorldEditAdapter {
     // ---- selection ----
 
     /**
-     * Axis-aligned bounding box of the actor's current selection. Exact only for a cuboid selection;
-     * other selection shapes (polygon, cylinder, ...) are reported by their bounding box.
+     * Axis-aligned bounding box of the actor's current selection in the world it is editing (its session's
+     * world override, else its own world - how WorldEdit's own commands pick the selection). Exact only for a
+     * cuboid selection; other selection shapes (polygon, cylinder, ...) are reported by their bounding box.
+     * @throws dev.herobrine.api.core.ApiException BAD_REQUEST if there is no complete selection in that
+     *         world, including one made in a different world
      */
     Box selection(Object actor);
 
@@ -195,7 +231,9 @@ public interface WorldEditAdapter {
     void scaleClipboard(Object actor, double sx, double sy, double sz);
 
     // ---- generation shapes (same actor/session/undo semantics as setBlocks: verified public EditSession
-    // methods, not a parallel implementation) ----
+    // methods, not a parallel implementation). Like WorldEdit's own //sphere, //cyl and //pyramid, each
+    // radius (and the cylinder's height, the pyramid's size) is first checked against WorldEdit's configured
+    // maxRadius via WorldEdit#checkMaxRadius - over it is BAD_REQUEST. ----
 
     /**
      * Generates a sphere, or an ellipsoid when the radii differ, of a pattern centered at x,y,z.

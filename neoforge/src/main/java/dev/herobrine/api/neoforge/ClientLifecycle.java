@@ -50,6 +50,7 @@ final class ClientLifecycle {
         StationBindings.register(c);
         ChatLog.register(c);
         BaritoneBindings.register(c);
+        ClientWorldEdit.register(c);
         NeoForge.EVENT_BUS.post(new RegisterApiEvent(c));
         if (ClientConfig.ENABLED.get()) {
             try { controller.start(); }

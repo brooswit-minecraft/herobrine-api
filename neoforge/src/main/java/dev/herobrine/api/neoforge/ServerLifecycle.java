@@ -38,6 +38,7 @@ final class ServerLifecycle {
         // client does for remote multiplayer.
         ctx.controlBlock = () -> null;
         ServerBindings.register(ctx, server);
+        WorldEditBindings.registerServer(ctx, server);
 
         java.nio.file.Path configFile = ServerConfig.configFilePath;
         if (configFile == null) {
