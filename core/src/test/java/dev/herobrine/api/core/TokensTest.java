@@ -6,7 +6,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -458,6 +458,66 @@ class TokensTest {
         });
     }
 
+    // ---- writeOwnerOnlyAtomic: the shared permission-preserving persistence FileSecretAccessor
+    // and ServerApiKeyAccessor (neoforge) both go through -- a regression here previously let
+    // ServerApiKeyAccessor silently drop a hardened config file to default (non-owner-only)
+    // permissions on its very first regenerate.
+
+    @Test void writeOwnerOnlyAtomicLeavesABrandNewFileOwnerOnly() throws IOException {
+        Path f = tmp.resolve("brand-new.cfg");
+        assertFalse(Files.exists(f), "sanity: no predecessor file to inherit permissions from");
+        Tokens.writeOwnerOnlyAtomic(f, List.of("enabled=true", "apiKey=abc"));
+        try {
+            assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(f)),
+                    "a brand-new file must be owner-only from the start, not just when overwriting an already-restricted one");
+        } catch (UnsupportedOperationException e) {
+            // POSIX permissions unsupported on this filesystem; nothing to assert here.
+        }
+    }
+
+    @Test void writeOwnerOnlyAtomicNeverWidensPermissionsAcrossARewrite() throws IOException {
+        Path f = tmp.resolve("hardened.cfg");
+        Tokens.writeOwnerOnlyAtomic(f, List.of("enabled=true", "apiKey=original"));
+        try {
+            // Simulate an operator who had additionally hardened the file (defense in depth);
+            // the rewrite below must not silently loosen this back to the process umask's default.
+            Files.setPosixFilePermissions(f, PosixFilePermissions.fromString("rw-------"));
+        } catch (UnsupportedOperationException e) {
+            return; // POSIX permissions unsupported on this filesystem; nothing to assert here.
+        }
+
+        Tokens.writeOwnerOnlyAtomic(f, List.of("enabled=true", "apiKey=regenerated"));
+
+        assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(f)),
+                "a regenerate-triggered rewrite must never widen the file's permissions");
+        assertEquals(List.of("enabled=true", "apiKey=regenerated"), Files.readAllLines(f, StandardCharsets.UTF_8));
+    }
+
+    @Test void accessorKeyRegenerationThroughTheRealTokensPathStaysOwnerOnly() throws IOException {
+        Path f = tmp.resolve("shared-hardened.cfg");
+        FakeFieldAccessor.seed(f, "enabled=true", "apiKey="); // blank: construction must regenerate
+        Tokens t = Tokens.loadOrCreateSingle(new FakeFieldAccessor(f));
+
+        try {
+            assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(f)),
+                    "the very first regenerate (brand-new file) must already be owner-only");
+        } catch (UnsupportedOperationException e) {
+            return; // POSIX permissions unsupported on this filesystem; nothing to assert here.
+        }
+
+        // An operator additionally hardens it (still owner-only, just making the intent explicit),
+        // then the field is blanked out from under the running process -- authenticate() must
+        // regenerate (per the live-disk-read fix) without ever widening the file's permissions.
+        Files.setPosixFilePermissions(f, PosixFilePermissions.fromString("rw-------"));
+        FakeFieldAccessor.writeField(f, "");
+        t.authenticate("probe-only-not-the-real-key"); // triggers the regenerate via the real Tokens path
+
+        assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(f)),
+                "regenerating through Tokens.authenticate() must never widen the file's permissions");
+        assertTrue(FakeFieldAccessor.readField(f).length() >= 32);
+        assertEquals("enabled=true", Files.readAllLines(f, StandardCharsets.UTF_8).get(0), "other fields untouched");
+    }
+
     /** Simulates the dedicated server's real backing: the secret as one field inside a larger
      * shared file alongside unrelated settings, exercised through the exact same
      * {@link Tokens.SecretAccessor} contract {@code ServerApiKeyAccessor} uses against
@@ -509,9 +569,9 @@ class TokensTest {
                 else out.add(line);
             }
             if (!replaced) out.add(PREFIX + secret);
-            Path tmp = file.resolveSibling(file.getFileName().toString() + ".tmp");
-            Files.write(tmp, out, StandardCharsets.UTF_8);
-            Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            // Same shared helper ServerApiKeyAccessor uses in the neoforge module -- this fake
+            // mirrors that accessor's real persistence, not just its read/write shape.
+            Tokens.writeOwnerOnlyAtomic(file, out);
         }
 
         @Override public Path lockAnchor() { return file; }

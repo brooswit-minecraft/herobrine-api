@@ -5,10 +5,8 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import net.neoforged.neoforge.common.ModConfigSpec;
@@ -29,9 +27,14 @@ import net.neoforged.neoforge.common.ModConfigSpec;
  * getRaw()} keeps returning the stale in-memory value forever: the "regenerate on next access, no
  * restart" requirement would silently not apply to this flavor. So {@link #read()} parses the real
  * {@code apiKey} line out of {@link #configFilePath} itself, every time, and {@link #write(String)}
- * replaces that one line via write-temp-then-atomic-rename (same technique {@code Tokens}'s own
- * file-based accessor uses) -- every other line (comments, {@code enabled}, {@code port}, ...) is
- * carried through byte-for-byte. After a successful write, {@link ModConfigSpec.ConfigValue#set}
+ * replaces that one line via {@link Tokens#writeOwnerOnlyAtomic} (the exact same
+ * write-temp-then-atomic-rename, owner-only-permission persistence {@code Tokens}'s own file-based
+ * accessor uses for its dedicated secret files) -- every other line (comments, {@code enabled},
+ * {@code port}, ...) is carried through byte-for-byte, and the whole file stays owner-only (POSIX
+ * atomic rename carries the renamed file's own permissions onto the destination name, never the
+ * destination's prior permissions, so creating the temp file owner-only is what actually keeps
+ * {@code configFilePath} restricted after every regenerate -- including the very first one). After
+ * a successful write, {@link ModConfigSpec.ConfigValue#set}
  * is also called (best-effort) purely so NeoForge's own in-memory cache doesn't silently diverge
  * from disk for any other in-process reader -- {@code save()} is deliberately never called here,
  * since that would let NeoForge rewrite the whole file from its in-memory model instead of our
@@ -43,7 +46,6 @@ final class ServerApiKeyAccessor implements Tokens.SecretAccessor {
      * raw (unescaped) value. NightConfig always quotes string values, including the blank default. */
     private static final Pattern API_KEY_LINE = Pattern.compile("^\\s*apiKey\\s*=\\s*\"(.*)\"\\s*$");
     private static final String KEY_NAME = "apiKey";
-    private static final String TMP_SUFFIX = ".tmp-";
 
     private final ModConfigSpec.ConfigValue<String> value;
     private final Path configFilePath;
@@ -85,14 +87,10 @@ final class ServerApiKeyAccessor implements Tokens.SecretAccessor {
         }
         if (!replaced) out.add(KEY_NAME + " = \"" + secret + "\"");
 
-        Path tmp = configFilePath.resolveSibling(configFilePath.getFileName().toString() + TMP_SUFFIX + Long.toHexString(ThreadLocalRandom.current().nextLong()));
-        try {
-            Files.write(tmp, out, StandardCharsets.UTF_8);
-            Files.move(tmp, configFilePath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        } catch (IOException e) {
-            Files.deleteIfExists(tmp);
-            throw new IOException("could not persist the dedicated server's API key to " + configFilePath, e);
-        }
+        // Owner-only, write-temp-then-atomic-rename -- see Tokens#writeOwnerOnlyAtomic's own
+        // javadoc for why this is what keeps the WHOLE file restricted, including on the very
+        // first regenerate (a brand-new file, not just one that already existed restricted).
+        Tokens.writeOwnerOnlyAtomic(configFilePath, out);
 
         // Best-effort only: the file write above is the durable, authoritative result already.
         // This just keeps NeoForge's in-memory cache from silently disagreeing with disk for any

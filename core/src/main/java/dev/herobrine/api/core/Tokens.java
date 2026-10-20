@@ -13,6 +13,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
@@ -43,6 +44,9 @@ public final class Tokens {
     /** Entropy of a freshly generated secret: 24 random bytes -> 48 hex characters, 192 bits. */
     private static final int SECRET_ENTROPY_BYTES = 24;
     private static final String LOCK_SUFFIX = ".lock";
+    private static final String TMP_PREFIX = ".tmp-";
+    /** Owner-only permissions for any file holding a secret, or a whole file a secret lives inside. */
+    private static final String OWNER_ONLY = "rw-------";
 
     private final SecretAccessor fullAccessor, readAccessor;
     private final boolean singleKey;
@@ -256,18 +260,45 @@ public final class Tokens {
         catch (NoSuchAlgorithmException e) { throw new IllegalStateException(e); }
     }
 
+    // ---- shared restrictive-permission, crash-safe file persistence ----
+
+    /**
+     * Writes {@code lines} to {@code target} via write-temp-then-atomic-rename, creating the temp
+     * file with owner-only permissions where the filesystem supports them (falling back to default
+     * permissions otherwise, e.g. on non-POSIX filesystems). POSIX atomic rename carries the
+     * RENAMED file's own permissions onto the destination name (never the destination's prior
+     * permissions), so this is what actually keeps {@code target} owner-only end to end -- a reader
+     * never observes a partial write, and {@code target} is never left more permissive than before,
+     * whether it previously existed or this is its first write. Exposed (not just used internally
+     * by {@link FileSecretAccessor}) for any {@link SecretAccessor} that persists a secret as part
+     * of a larger file -- e.g. one field inside a shared config file -- so that accessor gets the
+     * exact same restrictive-permission, crash-safe persistence this class uses for its own
+     * dedicated secret files, instead of re-implementing (and risking drifting from) it.
+     */
+    public static void writeOwnerOnlyAtomic(Path target, List<String> lines) throws IOException {
+        Path tmp = target.resolveSibling(target.getFileName().toString() + TMP_PREFIX + Long.toHexString(ThreadLocalRandom.current().nextLong()));
+        try {
+            try {
+                Files.createFile(tmp, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString(OWNER_ONLY)));
+            } catch (UnsupportedOperationException e) {
+                Files.createFile(tmp);
+            }
+            Files.write(tmp, lines, StandardCharsets.UTF_8);
+            Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            Files.deleteIfExists(tmp);
+            throw new IOException("could not persist to " + target, e);
+        }
+    }
+
     // ---- built-in file-backed accessor ----
 
     /**
      * Default accessor: a dedicated secret file. A value shorter than {@link #MIN_SECRET_LENGTH}
-     * (after trimming) is treated as missing. Written via write-temp-then-atomic-rename, so a
-     * reader never observes a partially written value and a crash mid-write never leaves the file
-     * corrupted.
+     * (after trimming) is treated as missing. Written via {@link #writeOwnerOnlyAtomic}.
      */
     private static final class FileSecretAccessor implements SecretAccessor {
         private static final int MIN_SECRET_LENGTH = 32;
-        private static final String TMP_PREFIX = ".tmp-";
-        private static final String OWNER_ONLY = "rw-------";
 
         private final Path file;
 
@@ -282,19 +313,7 @@ public final class Tokens {
 
         @Override
         public void write(String secret) throws IOException {
-            Path tmp = file.resolveSibling(file.getFileName().toString() + TMP_PREFIX + Long.toHexString(ThreadLocalRandom.current().nextLong()));
-            try {
-                try {
-                    Files.createFile(tmp, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString(OWNER_ONLY)));
-                } catch (UnsupportedOperationException e) {
-                    Files.createFile(tmp);
-                }
-                Files.writeString(tmp, secret, StandardCharsets.UTF_8);
-                Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-            } catch (IOException e) {
-                Files.deleteIfExists(tmp);
-                throw new IOException("could not persist token to " + file, e);
-            }
+            writeOwnerOnlyAtomic(file, List.of(secret));
         }
 
         @Override
