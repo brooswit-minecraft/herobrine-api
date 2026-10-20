@@ -13,14 +13,14 @@ modId = "neoforge"
 type = "required"
 versionRange = "[21.1,)"
 ordering = "NONE"
-side = "CLIENT"
+side = "BOTH"
 
 [[dependencies.herobrine_api]]
 modId = "minecraft"
 type = "required"
 versionRange = "[1.21.1,1.22)"
 ordering = "NONE"
-side = "CLIENT"
+side = "BOTH"
 
 [[dependencies.herobrine_api]]
 modId = "baritone"
