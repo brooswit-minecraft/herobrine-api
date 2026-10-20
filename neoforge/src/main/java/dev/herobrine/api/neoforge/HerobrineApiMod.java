@@ -18,9 +18,10 @@ import org.slf4j.Logger;
  * {@code FMLEnvironment.dist.isClient()} check, so {@link ClientLifecycle} (and everything it
  * reaches: {@code ClientBindings}, {@code ModBindings}, {@code WorldBindings}, {@code
  * EntityBindings}, {@code InventoryBindings}, {@code CraftingBindings}, {@code StationBindings},
- * {@code ChatLog}, {@code BaritoneBindings}, {@code MinecraftGameThread}, {@code Game}) is never
- * even classloaded on a dedicated server. The client's own context, lifecycle and command remain
- * exactly as before; see {@link ClientLifecycle} and {@link ServerLifecycle} for the two halves.
+ * {@code ChatLog}, {@code BaritoneBindings}, {@code ClientWorldEdit}, {@code MinecraftGameThread},
+ * {@code Game}) is never even classloaded on a dedicated server. The client's own context, lifecycle
+ * and command remain exactly as before; see {@link ClientLifecycle} and {@link ServerLifecycle} for the
+ * two halves.
  */
 @Mod(HerobrineApiMod.MOD_ID)
 public final class HerobrineApiMod {

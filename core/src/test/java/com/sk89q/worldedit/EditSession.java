@@ -20,6 +20,8 @@ public final class EditSession implements Extent, AutoCloseable {
      */
     public int size;
     public boolean closed;
+    /** The block bag an undo/redo replayed this edit with (the real undo builds a fresh session with it). */
+    public com.sk89q.worldedit.extent.inventory.BlockBag blockBag;
 
     public EditSession(Actor actor) { this(actor, -1); }
     public EditSession(Actor actor, int maxBlocks) { this.actor = actor; this.maxBlocks = maxBlocks; }

@@ -28,3 +28,12 @@ type = "optional"
 versionRange = "[0,)"
 ordering = "AFTER"
 side = "CLIENT"
+
+# Only 7.3.8 is verified; any other installed version is reported at runtime (501 UNSUPPORTED) rather than
+# refused at load time, so this range stays open.
+[[dependencies.herobrine_api]]
+modId = "worldedit"
+type = "optional"
+versionRange = "[0,)"
+ordering = "AFTER"
+side = "BOTH"

@@ -1,6 +1,8 @@
 package com.sk89q.worldedit;
 
+import com.sk89q.worldedit.entity.Player;
 import com.sk89q.worldedit.extension.platform.Actor;
+import com.sk89q.worldedit.extent.inventory.BlockBag;
 import com.sk89q.worldedit.math.BlockVector3;
 import com.sk89q.worldedit.regions.Region;
 import com.sk89q.worldedit.session.ClipboardHolder;
@@ -16,9 +18,12 @@ public final class LocalSession {
     public ClipboardHolder clipboard;
     public World selectionWorld;
     public Region selectionRegion;
+    public World worldOverride;
     public BlockVector3 placementPosition;
     /** -1 = unlimited, mirrors {@code LocalSession.getBlockChangeLimit()}. */
     public int blockChangeLimit = -1;
+    /** Mirrors the real {@code useInventory} flag behind {@code getBlockBag(Player)}. */
+    public BlockBag inventoryBlockBag;
 
     /**
      * Mirrors the real {@code LocalSession.createEditSession(Actor)} (LocalSession.java:1104): the session
@@ -38,16 +43,23 @@ public final class LocalSession {
         historyPointer = history.size();
     }
 
-    public EditSession undo(Object newBlockBag, Actor actor) {
+    public EditSession undo(BlockBag newBlockBag, Actor actor) {
+        FakeWorldEdit.INSTANCE.calls.add("undo:" + newBlockBag);
         --historyPointer;
-        if (historyPointer >= 0) return history.get(historyPointer);
+        if (historyPointer >= 0) return replayedWith(history.get(historyPointer), newBlockBag);
         historyPointer = 0;
         return null;
     }
 
-    public EditSession redo(Object newBlockBag, Actor actor) {
-        if (historyPointer < history.size()) return history.get(historyPointer++);
+    public EditSession redo(BlockBag newBlockBag, Actor actor) {
+        FakeWorldEdit.INSTANCE.calls.add("redo:" + newBlockBag);
+        if (historyPointer < history.size()) return replayedWith(history.get(historyPointer++), newBlockBag);
         return null;
+    }
+
+    private static EditSession replayedWith(EditSession e, BlockBag bag) {
+        e.blockBag = bag;
+        return e;
     }
 
     public ClipboardHolder getClipboard() throws EmptyClipboardException {
@@ -59,12 +71,18 @@ public final class LocalSession {
 
     public World getSelectionWorld() { return selectionWorld; }
 
+    public boolean hasWorldOverride() { return worldOverride != null; }
+    public World getWorldOverride() { return worldOverride; }
+
+    /** Mirrors the real check: a selection only counts in the world it was made in. */
     public Region getSelection(World world) throws IncompleteRegionException {
         if (world == null || selectionWorld == null || !selectionWorld.equals(world) || selectionRegion == null) {
             throw new IncompleteRegionException();
         }
         return selectionRegion;
     }
+
+    public BlockBag getBlockBag(Player player) { return inventoryBlockBag; }
 
     public BlockVector3 getPlacementPosition(Actor actor) throws IncompleteRegionException {
         if (placementPosition == null) throw new IncompleteRegionException();

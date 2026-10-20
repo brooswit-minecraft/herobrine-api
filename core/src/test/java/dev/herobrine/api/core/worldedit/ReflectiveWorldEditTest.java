@@ -171,8 +171,7 @@ class ReflectiveWorldEditTest {
         ApiException e = assertThrows(ApiException.class, () -> a.selection(actor));
         assertEquals("BAD_REQUEST", e.code);
 
-        World world = new World() {};
-        session().selectionWorld = world;
+        session().selectionWorld = actor.world;
         session().selectionRegion = new com.sk89q.worldedit.regions.CuboidRegion(BlockVector3.at(1, 2, 3), BlockVector3.at(4, 5, 6));
         Box box = a.selection(actor);
         assertEquals(new Box(1, 2, 3, 4, 5, 6), box);
@@ -182,8 +181,7 @@ class ReflectiveWorldEditTest {
         ApiException e = assertThrows(ApiException.class, () -> a.cylinderSelection(actor));
         assertEquals("BAD_REQUEST", e.code);
 
-        World world = new World() {};
-        session().selectionWorld = world;
+        session().selectionWorld = actor.world;
         session().selectionRegion = new com.sk89q.worldedit.regions.CuboidRegion(BlockVector3.at(1, 2, 3), BlockVector3.at(4, 5, 6));
         ApiException notCylinder = assertThrows(ApiException.class, () -> a.cylinderSelection(actor));
         assertEquals("BAD_REQUEST", notCylinder.code);
@@ -215,13 +213,12 @@ class ReflectiveWorldEditTest {
         ApiException e = assertThrows(ApiException.class, () -> a.polygonSelection(actor));
         assertEquals("BAD_REQUEST", e.code);
 
-        World world = new World() {};
-        session().selectionWorld = world;
+        session().selectionWorld = actor.world;
         session().selectionRegion = new com.sk89q.worldedit.regions.CuboidRegion(BlockVector3.at(1, 2, 3), BlockVector3.at(4, 5, 6));
         ApiException notPolygon = assertThrows(ApiException.class, () -> a.polygonSelection(actor));
         assertEquals("BAD_REQUEST", notPolygon.code);
 
-        var poly = new com.sk89q.worldedit.regions.Polygonal2DRegion(world, java.util.List.of(
+        var poly = new com.sk89q.worldedit.regions.Polygonal2DRegion(actor.world, java.util.List.of(
                 com.sk89q.worldedit.math.BlockVector2.at(0, 0),
                 com.sk89q.worldedit.math.BlockVector2.at(4, 0),
                 com.sk89q.worldedit.math.BlockVector2.at(4, 4)), 10, 20);
@@ -285,8 +282,7 @@ class ReflectiveWorldEditTest {
         ApiException e = assertThrows(ApiException.class, () -> a.ellipsoidSelection(actor));
         assertEquals("BAD_REQUEST", e.code);
 
-        World world = new World() {};
-        session().selectionWorld = world;
+        session().selectionWorld = actor.world;
         session().selectionRegion = new com.sk89q.worldedit.regions.CuboidRegion(BlockVector3.at(1, 2, 3), BlockVector3.at(4, 5, 6));
         ApiException notEllipsoid = assertThrows(ApiException.class, () -> a.ellipsoidSelection(actor));
         assertEquals("BAD_REQUEST", notEllipsoid.code);
@@ -315,8 +311,7 @@ class ReflectiveWorldEditTest {
         ApiException e = assertThrows(ApiException.class, () -> a.convexHullSelection(actor));
         assertEquals("BAD_REQUEST", e.code);
 
-        World world = new World() {};
-        session().selectionWorld = world;
+        session().selectionWorld = actor.world;
         session().selectionRegion = new com.sk89q.worldedit.regions.CuboidRegion(BlockVector3.at(1, 2, 3), BlockVector3.at(4, 5, 6));
         ApiException notHull = assertThrows(ApiException.class, () -> a.convexHullSelection(actor));
         assertEquals("BAD_REQUEST", notHull.code);
@@ -463,5 +458,136 @@ class ReflectiveWorldEditTest {
         FakeWorldEdit.INSTANCE.schematicIoFails = true;
         ApiException e = assertThrows(ApiException.class, () -> a.saveSchematic(actor, schem));
         assertEquals("ACTION_FAILED", e.code);
+    }
+
+    // ---- MINECRAFT-476: actor context and faithful WorldEdit behavior ----
+
+    /** An actor that is not a player and not Locatable, like a console. */
+    private static com.sk89q.worldedit.extension.platform.Actor console() {
+        return new com.sk89q.worldedit.extension.platform.Actor() {
+            final java.util.UUID id = java.util.UUID.randomUUID();
+            @Override public com.sk89q.worldedit.session.SessionKey getSessionKey() { return () -> id; }
+            @Override public boolean hasPermission(String permission) { return true; }
+            @Override public String toString() { return "Console"; }
+        };
+    }
+
+    @Test void anUnreadableManifestVersionFallsBackToTheVersionWorldEditDeclaresToTheLoader() {
+        // WorldEditManifest only reads a jar: class URL; under NeoForge's module class loader it reports "(unknown)".
+        FakeWorldEdit.INSTANCE.version = "(unknown)";
+        ReflectiveWorldEdit declared = new ReflectiveWorldEdit(getClass().getClassLoader(), () -> "7.3.8+1379-7d32b45");
+        assertEquals("7.3.8+1379-7d32b45", declared.version());
+        assertEquals(7, declared.setBlocks(actor, new Box(0, 0, 0, 1, 1, 1), "stone"));
+        assertEquals("UNSUPPORTED", assertThrows(ApiException.class,
+                () -> a.setBlocks(actor, new Box(0, 0, 0, 1, 1, 1), "stone")).code); // nothing declared: still refused
+
+        FakeWorldEdit.INSTANCE.version = "7.3.9"; // a version WorldEdit does report is never overridden
+        assertEquals("UNSUPPORTED", assertThrows(ApiException.class,
+                () -> declared.setBlocks(actor, new Box(0, 0, 0, 1, 1, 1), "stone")).code);
+    }
+
+    @Test void hasPermissionAsksTheActorItself() {
+        FakeActor guest = new FakeActor("guest", new FakeWorld("overworld"), java.util.Set.of("worldedit.region.set"));
+        assertTrue(a.hasPermission(guest, "worldedit.region.set"));
+        assertFalse(a.hasPermission(guest, "worldedit.region.replace"));
+    }
+
+    @Test void theSelectionIsTheOneInTheWorldBeingEdited() {
+        session().selectionRegion = new com.sk89q.worldedit.regions.CuboidRegion(BlockVector3.at(1, 2, 3), BlockVector3.at(4, 5, 6));
+        session().selectionWorld = new FakeWorld("the_nether"); // made in another world than the actor's
+        ApiException elsewhere = assertThrows(ApiException.class, () -> a.selection(actor));
+        assertEquals("BAD_REQUEST", elsewhere.code);
+
+        session().worldOverride = new FakeWorld("the_nether"); // like //world the_nether: the override wins
+        assertEquals(new Box(1, 2, 3, 4, 5, 6), a.selection(actor));
+
+        session().worldOverride = null;
+        actor.world = new FakeWorld("the_nether"); // or the player went there
+        assertEquals(new Box(1, 2, 3, 4, 5, 6), a.selection(actor));
+    }
+
+    @Test void anActorWithNoWorldHasNoSelectionToReport() {
+        ApiException e = assertThrows(ApiException.class, () -> a.selection(console()));
+        assertEquals("BAD_REQUEST", e.code);
+        assertTrue(e.getMessage().contains("not in a world"));
+    }
+
+    @Test void undoAndRedoUseTheSessionsBlockBagAndFlushItLikeWorldEdit() {
+        session().inventoryBlockBag = new com.sk89q.worldedit.extent.inventory.BlockBag();
+        a.setBlocks(actor, new Box(0, 0, 0, 1, 1, 1), "stone");
+        FakeWorldEdit.INSTANCE.calls.clear();
+        assertTrue(a.undo(actor));
+        assertEquals(java.util.List.of("undo:BlockBag", "flushBlockBag:Actor(steve):BlockBag"), FakeWorldEdit.INSTANCE.calls);
+        FakeWorldEdit.INSTANCE.calls.clear();
+        assertFalse(a.undo(actor)); // nothing undone: nothing to flush
+        assertEquals(java.util.List.of("undo:BlockBag"), FakeWorldEdit.INSTANCE.calls);
+        FakeWorldEdit.INSTANCE.calls.clear();
+        assertTrue(a.redo(actor));
+        assertEquals(java.util.List.of("redo:BlockBag", "flushBlockBag:Actor(steve):BlockBag"), FakeWorldEdit.INSTANCE.calls);
+    }
+
+    @Test void aNonPlayerActorUndoesWithoutABlockBag() {
+        var console = console();
+        a.setBlocks(console, new Box(0, 0, 0, 1, 1, 1), "stone");
+        FakeWorldEdit.INSTANCE.calls.clear();
+        assertTrue(a.undo(console));
+        assertEquals("undo:null", FakeWorldEdit.INSTANCE.calls.get(0));
+    }
+
+    @Test void savingBakesThePendingTransformLikeSchemSave(@TempDir java.nio.file.Path tmp) {
+        a.copy(actor, new Box(0, 0, 0, 1, 1, 1));
+        a.rotateClipboard(actor, 90, 0, 0);
+        a.saveSchematic(actor, tmp.resolve("rotated.schem").toFile());
+        assertTrue(FakeWorldEdit.INSTANCE.calls.stream().anyMatch(
+                c -> c.startsWith("schematic.write:Clipboard(") && c.contains("+AffineTransform[rotateY(-90.0)")),
+                FakeWorldEdit.INSTANCE.calls.toString());
+    }
+
+    @Test void generationChecksWorldEditsConfiguredMaxRadiusFirst() {
+        FakeWorldEdit.INSTANCE.maxRadius = 5;
+        assertEquals("BAD_REQUEST", assertThrows(ApiException.class,
+                () -> a.makeSphere(actor, 0, 64, 0, 6, 1, 1, true, "stone")).code);
+        assertEquals("BAD_REQUEST", assertThrows(ApiException.class,
+                () -> a.makeCylinder(actor, 0, 64, 0, 1, 1, 6, true, "stone")).code); // //cyl checks the height too
+        assertEquals("BAD_REQUEST", assertThrows(ApiException.class,
+                () -> a.makePyramid(actor, 0, 64, 0, 6, true, "stone")).code);
+        assertTrue(FakeWorldEdit.INSTANCE.calls.stream().noneMatch(c -> c.startsWith("createEditSession")));
+        assertEquals(11, a.makeSphere(actor, 0, 64, 0, 5, 5, 5, true, "stone"));
+    }
+
+    @Test void theBlockChangeLimitErrorNamesTheLimitAndThatThePartialEditCanBeUndone() {
+        session().blockChangeLimit = 5;
+        ApiException e = assertThrows(ApiException.class, () -> a.setBlocks(actor, new Box(0, 0, 0, 1, 1, 1), "stone"));
+        assertTrue(e.getMessage().contains("(5)"), e.getMessage());
+        assertTrue(e.getMessage().contains("worldedit.undo"), e.getMessage());
+    }
+
+    @Test void aPasteOverTheBlockChangeLimitIsABadRequestAndStaysUndoable() {
+        a.copy(actor, new Box(0, 0, 0, 1, 1, 1));
+        session().blockChangeLimit = 2; // the fake paste writes 4 blocks
+        ApiException e = assertThrows(ApiException.class, () -> a.paste(actor, 0, 0, 0));
+        assertEquals("BAD_REQUEST", e.code);
+        assertEquals(1, session().history.size());
+        assertEquals(2, session().history.get(0).size);
+    }
+
+    @Test void schematicsDirectoryIsWorldEditsConfiguredSaveDir(@TempDir java.nio.file.Path tmp) {
+        FakeWorldEdit.INSTANCE.workingDirectory = tmp.resolve("config").resolve("worldedit");
+        assertEquals(tmp.resolve("config").resolve("worldedit").resolve("schematics"), a.schematicsDirectory());
+        FakeWorldEdit.INSTANCE.configuration.saveDir = tmp.resolve("elsewhere").toString(); // an absolute saveDir is used as is
+        assertEquals(tmp.resolve("elsewhere"), a.schematicsDirectory());
+    }
+
+    @Test void clipboardVolumeIsTheClipboardRegionsVolume() {
+        assertEquals("BAD_REQUEST", assertThrows(ApiException.class, () -> a.clipboardVolume(actor)).code);
+        a.copy(actor, new Box(0, 0, 0, 1, 2, 3));
+        assertEquals(24, a.clipboardVolume(actor));
+    }
+
+    @Test void anUnloadedWorldIsUnavailableNotAServerError() {
+        FakeWorldEdit.INSTANCE.worldUnloaded = true;
+        ApiException e = assertThrows(ApiException.class, () -> a.setBlocks(actor, new Box(0, 0, 0, 1, 1, 1), "stone"));
+        assertEquals(409, e.status);
+        assertEquals("ACTION_UNAVAILABLE", e.code);
     }
 }

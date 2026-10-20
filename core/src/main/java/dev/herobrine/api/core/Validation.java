@@ -51,11 +51,26 @@ public final class Validation {
         return s;
     }
 
-    /** Number of blocks in the inclusive box between two corners; rejects boxes larger than {@code maxVolume}. */
+    /** A block coordinate within the world's hard limit (±30,000,000). */
+    public static int coordinate(int v) {
+        if (Math.abs((long) v) > WORLD_LIMIT) throw ApiException.badRequest("Coordinate out of range: " + v);
+        return v;
+    }
+
+    /**
+     * Number of blocks in the inclusive box between two corners; rejects boxes larger than {@code maxVolume}.
+     * Each side is at most 60,000,001 blocks, so the product of three can exceed {@code Long.MAX_VALUE}; an
+     * overflowing product is rejected instead of wrapping around to a small or negative volume that would pass.
+     */
     public static long boxVolume(int x1, int y1, int z1, int x2, int y2, int z2, long maxVolume) {
-        for (int v : new int[]{x1, y1, z1, x2, y2, z2})
-            if (Math.abs((long) v) > WORLD_LIMIT) throw ApiException.badRequest("Coordinate out of range: " + v);
-        long volume = (Math.abs((long) x1 - x2) + 1) * (Math.abs((long) y1 - y2) + 1) * (Math.abs((long) z1 - z2) + 1);
+        for (int v : new int[]{x1, y1, z1, x2, y2, z2}) coordinate(v);
+        long volume;
+        try {
+            volume = Math.multiplyExact(Math.multiplyExact(Math.abs((long) x1 - x2) + 1, Math.abs((long) y1 - y2) + 1),
+                    Math.abs((long) z1 - z2) + 1);
+        } catch (ArithmeticException e) {
+            throw ApiException.badRequest("Selection exceeds the limit of " + maxVolume + " blocks");
+        }
         if (volume > maxVolume) throw ApiException.badRequest("Selection of " + volume + " blocks exceeds the limit of " + maxVolume);
         return volume;
     }

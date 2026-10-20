@@ -8,11 +8,13 @@ import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Supplier;
 
 /**
  * {@link WorldEditAdapter} that talks to WorldEdit's API by reflection, so WorldEdit stays an optional
@@ -44,21 +46,50 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
     private static final String FORWARD_EXTENT_COPY = "com.sk89q.worldedit.function.operation.ForwardExtentCopy";
     private static final String OPERATIONS = "com.sk89q.worldedit.function.operation.Operations";
     private static final String AFFINE_TRANSFORM = "com.sk89q.worldedit.math.transform.AffineTransform";
+    private static final String PLAYER = "com.sk89q.worldedit.entity.Player";
+    private static final String LOCATABLE = "com.sk89q.worldedit.extension.platform.Locatable";
 
     // Checked exceptions worth translating into a specific ApiException rather than a generic 500.
     private static final String INCOMPLETE_REGION_EXCEPTION = "com.sk89q.worldedit.IncompleteRegionException";
     private static final String EMPTY_CLIPBOARD_EXCEPTION = "com.sk89q.worldedit.EmptyClipboardException";
     private static final String MAX_CHANGED_BLOCKS_EXCEPTION = "com.sk89q.worldedit.MaxChangedBlocksException";
+    private static final String MAX_RADIUS_EXCEPTION = "com.sk89q.worldedit.MaxRadiusException";
     private static final String INPUT_PARSE_EXCEPTION = "com.sk89q.worldedit.extension.input.InputParseException";
+
+    /**
+     * What WorldEdit's NeoForge world throws once the {@code ServerLevel} behind it has been unloaded: a plain
+     * {@code RuntimeException} with this exact message (verified: {@code NeoForgeWorld.getWorld()},
+     * {@code NeoForgeWorld.java:165-172} in worldedit-neoforge-mc1.21 7.3.8), reported as 409 rather than 500.
+     */
+    private static final String WORLD_UNLOADED_MESSAGE = "The reference to the world was lost";
 
     /** The exact WorldEdit release this adapter was verified against (see class Javadoc) - not a branch:
      *  every signature here was checked against 7.3.8 specifically, not against 7.3.9+ or any other 7.3.x. */
     private static final String SUPPORTED_VERSION = "7.3.8";
 
+    /**
+     * What {@code WorldEdit.getVersion()} returns when {@code WorldEditManifest} cannot read its own jar's
+     * manifest (verified: {@code WorldEditManifest.java:61}) - it only reads a {@code jar:} class URL
+     * ({@code WorldEditManifest.java:70}), and a mod loaded through NeoForge's module class loader is served
+     * from a {@code union:} URL instead.
+     */
+    private static final String UNKNOWN_VERSION = "(unknown)";
+
     private final ClassLoader loader;
+    private final Supplier<String> declaredVersion;
 
     public ReflectiveWorldEdit(ClassLoader loader) {
+        this(loader, () -> null);
+    }
+
+    /**
+     * @param declaredVersion the version the installed WorldEdit declares to the mod loader (e.g. its
+     *        {@code mods.toml} version "7.3.8+1379-7d32b45"), used only when {@code WorldEdit.getVersion()}
+     *        cannot tell; may return null
+     */
+    public ReflectiveWorldEdit(ClassLoader loader, Supplier<String> declaredVersion) {
         this.loader = loader;
+        this.declaredVersion = declaredVersion;
     }
 
     // ---- availability ----
@@ -71,7 +102,8 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
     @Override public String version() {
         if (!installed()) return null;
         Object v = invokeStatic(load(WORLDEDIT), "getVersion");
-        return v == null ? null : v.toString();
+        String version = v == null ? null : v.toString();
+        return version == null || version.equals(UNKNOWN_VERSION) ? declaredVersion.get() : version;
     }
 
     /** @return the WorldEdit instance, after checking the installed build is the verified-compatible version. */
@@ -99,6 +131,50 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
 
     private Object session(Object we, Object actor) {
         return invoke(invoke(we, "getSessionManager"), "get", actor);
+    }
+
+    // ---- actor context ----
+
+    @Override public boolean hasPermission(Object actor, String permission) {
+        worldEdit();
+        return (Boolean) invoke(actor, "hasPermission", permission);
+    }
+
+    /** {@code WorldEdit.getWorkingDirectoryPath(getConfiguration().saveDir)} - verified the exact expression
+     *  {@code SchematicCommands.save}/{@code load} use (SchematicCommands.java:117,164); {@code saveDir} is a
+     *  public field of {@code LocalConfiguration}, not a getter. */
+    @Override public Path schematicsDirectory() {
+        Object we = worldEdit();
+        Object config = invoke(we, "getConfiguration");
+        Object saveDir;
+        try {
+            saveDir = config.getClass().getField("saveDir").get(config);
+        } catch (ReflectiveOperationException e) {
+            throw new ApiException(501, "UNSUPPORTED", "Installed WorldEdit has no LocalConfiguration.saveDir");
+        }
+        if (!(saveDir instanceof String dir)) throw new ApiException(501, "UNSUPPORTED", "WorldEdit's saveDir is not set");
+        return ((Path) invoke(we, "getWorkingDirectoryPath", dir)).toAbsolutePath().normalize();
+    }
+
+    @Override public long clipboardVolume(Object actor) {
+        Object we = worldEdit();
+        Object holder = invokeTranslating(session(we, actor), "getClipboard", EMPTY_CLIPBOARD_EXCEPTION, "No clipboard is set");
+        Object region = invoke(invoke(holder, "getClipboard"), "getRegion");
+        return ((Number) invoke(region, "getVolume")).longValue();
+    }
+
+    /**
+     * The world the actor's edits and selection apply to, picked exactly as WorldEdit's own commands inject
+     * it (verified: {@code PlatformCommandManager.java:263-282}): the session's world override if it has one,
+     * else the actor's own world as a {@code Locatable}.
+     */
+    private Object editingWorld(Object session, Object actor) {
+        if ((Boolean) invoke(session, "hasWorldOverride")) return invoke(session, "getWorldOverride");
+        if (load(LOCATABLE).isInstance(actor)) {
+            Object extent = invoke(actor, "getExtent");
+            if (load(WORLD_CLASS).isInstance(extent)) return extent;
+        }
+        throw ApiException.badRequest("The actor is not in a world WorldEdit can edit");
     }
 
     /**
@@ -146,8 +222,7 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
         Object session = session(we, actor);
         Object editSession = newEditSession(session, actor);
         try {
-            return (Integer) invokeTranslating(editSession, "setBlocks", MAX_CHANGED_BLOCKS_EXCEPTION,
-                    "Edit exceeds the configured block change limit", region, patternObj);
+            return (Integer) limited(() -> invoke(editSession, "setBlocks", region, patternObj));
         } finally {
             rememberAndClose(session, editSession);
         }
@@ -161,8 +236,7 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
         Object session = session(we, actor);
         Object editSession = newEditSession(session, actor);
         try {
-            return (Integer) invokeTranslating(editSession, "replaceBlocks", MAX_CHANGED_BLOCKS_EXCEPTION,
-                    "Edit exceeds the configured block change limit", region, maskObj, patternObj);
+            return (Integer) limited(() -> invoke(editSession, "replaceBlocks", region, maskObj, patternObj));
         } finally {
             rememberAndClose(session, editSession);
         }
@@ -170,14 +244,28 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
 
     // ---- history ----
 
+    /**
+     * Mirrors WorldEdit's own {@code //undo} (verified: {@code HistoryCommands.java:79-85}): the session's
+     * block bag for a player actor ({@code LocalSession.getBlockBag(Player)}, null unless the session uses
+     * the player's inventory), then {@code WorldEdit.flushBlockBag} on whatever was undone.
+     */
     @Override public boolean undo(Object actor) {
-        Object we = worldEdit();
-        return invoke(session(we, actor), "undo", null, actor) != null;
+        return replayHistory(actor, "undo");
     }
 
+    /** Mirrors WorldEdit's own {@code //redo} the same way ({@code HistoryCommands.java:118-124}). */
     @Override public boolean redo(Object actor) {
+        return replayHistory(actor, "redo");
+    }
+
+    private boolean replayHistory(Object actor, String direction) {
         Object we = worldEdit();
-        return invoke(session(we, actor), "redo", null, actor) != null;
+        Object session = session(we, actor);
+        Object blockBag = load(PLAYER).isInstance(actor) ? invoke(session, "getBlockBag", actor) : null;
+        Object replayed = invoke(session, direction, blockBag, actor);
+        if (replayed == null) return false;
+        invoke(we, "flushBlockBag", actor, replayed);
+        return true;
     }
 
     // ---- clipboard / schematics ----
@@ -232,7 +320,7 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
             pasteBuilder = invoke(pasteBuilder, "copyEntities", copyEntities);
             pasteBuilder = invoke(pasteBuilder, "copyBiomes", copyBiomes);
             Object operation = invoke(pasteBuilder, "build");
-            invokeStatic(load(OPERATIONS), "completeLegacy", operation);
+            limited(() -> invokeStatic(load(OPERATIONS), "completeLegacy", operation));
         } finally {
             rememberAndClose(session, editSession);
         }
@@ -243,7 +331,9 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
         Object format = resolveFormat(file);
         Object session = session(we, actor);
         Object holder = invokeTranslating(session, "getClipboard", EMPTY_CLIPBOARD_EXCEPTION, "No clipboard is set");
-        Object clipboard = invoke(holder, "getClipboard");
+        // Bake in any pending rotate/scale exactly as //schem save does (verified:
+        // SchematicCommands.SchematicOutputTask.writeToOutputStream, SchematicCommands.java:372-375).
+        Object clipboard = invoke(invoke(holder, "getClipboard"), "transform", invoke(holder, "getTransform"));
         try (FileOutputStream out = new FileOutputStream(file)) {
             Object writer = invoke(format, "getWriter", out);
             try { invoke(writer, "write", clipboard); } finally { invoke(writer, "close"); }
@@ -316,12 +406,17 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
         return new Cylinder(centerX, centerZ, radiusX, radiusZ, minY, maxY);
     }
 
+    /**
+     * The actor's selection in the world it is editing ({@link #editingWorld}), as WorldEdit's own commands
+     * inject {@code @Selection Region} ({@code PlatformCommandManager.java:238-251}). A selection made in
+     * another world is not this world's selection - {@code LocalSession.getSelection(World)} throws
+     * {@code IncompleteRegionException} for it - so it is reported missing rather than as if it were current.
+     */
     private Object selectedRegion(Object we, Object actor) {
         Object session = session(we, actor);
-        Object world = invoke(session, "getSelectionWorld");
-        if (world == null) throw ApiException.badRequest("No selection world is set");
         return invokeTranslating(session, "getSelection", INCOMPLETE_REGION_EXCEPTION,
-                "No selection is defined (or it is in a different world)", world);
+                "No complete selection in the world being edited (a selection made in another world does not count)",
+                editingWorld(session, actor));
     }
 
     // ---- cylinder edits (same mechanics as the Box overloads, different region construction) ----
@@ -510,43 +605,47 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
 
     // ---- generation shapes ----
 
+    /** Checks each radius against WorldEdit's configured maxRadius first, as //sphere does
+     *  (GenerationCommands.java:230-232). */
     @Override public int makeSphere(Object actor, int x, int y, int z, double radiusX, double radiusY, double radiusZ, boolean filled, String pattern) {
         Object we = worldEdit();
+        checkMaxRadius(we, radiusX, radiusY, radiusZ);
         Object patternObj = parsePattern(we, actor, pattern);
         Object pos = blockVector3(x, y, z);
         Object session = session(we, actor);
         Object editSession = newEditSession(session, actor);
         try {
-            return (Integer) invokeTranslating(editSession, "makeSphere", MAX_CHANGED_BLOCKS_EXCEPTION,
-                    "Edit exceeds the configured block change limit", pos, patternObj, radiusX, radiusY, radiusZ, filled);
+            return (Integer) limited(() -> invoke(editSession, "makeSphere", pos, patternObj, radiusX, radiusY, radiusZ, filled));
         } finally {
             rememberAndClose(session, editSession);
         }
     }
 
+    /** Checks both radii and the height against maxRadius first, as //cyl does (GenerationCommands.java:125-127). */
     @Override public int makeCylinder(Object actor, int x, int y, int z, double radiusX, double radiusZ, int height, boolean filled, String pattern) {
         Object we = worldEdit();
+        checkMaxRadius(we, radiusX, radiusZ, height);
         Object patternObj = parsePattern(we, actor, pattern);
         Object pos = blockVector3(x, y, z);
         Object session = session(we, actor);
         Object editSession = newEditSession(session, actor);
         try {
-            return (Integer) invokeTranslating(editSession, "makeCylinder", MAX_CHANGED_BLOCKS_EXCEPTION,
-                    "Edit exceeds the configured block change limit", pos, patternObj, radiusX, radiusZ, height, filled);
+            return (Integer) limited(() -> invoke(editSession, "makeCylinder", pos, patternObj, radiusX, radiusZ, height, filled));
         } finally {
             rememberAndClose(session, editSession);
         }
     }
 
+    /** Checks the size against maxRadius first, as //pyramid does (GenerationCommands.java:344). */
     @Override public int makePyramid(Object actor, int x, int y, int z, int size, boolean filled, String pattern) {
         Object we = worldEdit();
+        checkMaxRadius(we, size);
         Object patternObj = parsePattern(we, actor, pattern);
         Object pos = blockVector3(x, y, z);
         Object session = session(we, actor);
         Object editSession = newEditSession(session, actor);
         try {
-            return (Integer) invokeTranslating(editSession, "makePyramid", MAX_CHANGED_BLOCKS_EXCEPTION,
-                    "Edit exceeds the configured block change limit", pos, patternObj, size, filled);
+            return (Integer) limited(() -> invoke(editSession, "makePyramid", pos, patternObj, size, filled));
         } finally {
             rememberAndClose(session, editSession);
         }
@@ -660,6 +759,30 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
         return ctx;
     }
 
+    /** {@code WorldEdit.checkMaxRadius(double)} for each value: WorldEdit's own configured generation limit. */
+    private void checkMaxRadius(Object we, double... radii) {
+        for (double r : radii) {
+            invokeTranslating(we, "checkMaxRadius", MAX_RADIUS_EXCEPTION,
+                    "Radius " + r + " exceeds WorldEdit's configured maximum (maxRadius)", r);
+        }
+    }
+
+    /**
+     * Runs an edit-producing call. Real WorldEdit applies changes one at a time and refuses only the write
+     * past the session's block change limit ({@code BlockChangeLimiter}), so a {@code MaxChangedBlocksException}
+     * means a partial edit: everything up to the limit is applied, and the caller's {@code finally} remembers
+     * it, so the error says it stays undoable rather than implying nothing happened.
+     */
+    private Object limited(Supplier<Object> call) {
+        try {
+            return call.get();
+        } catch (ApiException e) {
+            if (!causedBy(e, MAX_CHANGED_BLOCKS_EXCEPTION)) throw e;
+            throw ApiException.badRequest("Max blocks changed in an operation reached (" + invoke(e.getCause(), "getBlockLimit")
+                    + "); the changes made before the limit stay applied and can be undone with worldedit.undo");
+        }
+    }
+
     /** Like {@link #invoke}, but translates a specific checked exception into a 400 with a friendlier message. */
     private Object invokeTranslating(Object target, String name, String checkedExceptionClass, String friendlyMessage, Object... args) {
         try {
@@ -706,11 +829,19 @@ public final class ReflectiveWorldEdit implements WorldEditAdapter {
     private static Object run(Method m, Object target, String name, Object[] args) {
         try { return m.invoke(target, args); }
         catch (InvocationTargetException e) {
-            ApiException ex = new ApiException(500, "ACTION_FAILED", "WorldEdit " + name + " failed: " + e.getCause());
+            ApiException ex = worldUnloaded(e.getCause())
+                    ? ApiException.unavailable("The world WorldEdit is editing has been unloaded")
+                    : new ApiException(500, "ACTION_FAILED", "WorldEdit " + name + " failed: " + e.getCause());
             ex.initCause(e.getCause());
             throw ex;
         }
         catch (IllegalAccessException e) { throw new ApiException(501, "UNSUPPORTED", "WorldEdit " + name + " is not accessible: " + e.getMessage()); }
+    }
+
+    private static boolean worldUnloaded(Throwable t) {
+        for (; t != null; t = t.getCause())
+            if (t.getClass() == RuntimeException.class && String.valueOf(t.getMessage()).startsWith(WORLD_UNLOADED_MESSAGE)) return true;
+        return false;
     }
 
     /** Prefers methods declared on public interfaces (always accessible), then the class itself. */

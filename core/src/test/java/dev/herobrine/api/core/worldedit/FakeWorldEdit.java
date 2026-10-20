@@ -28,6 +28,12 @@ public final class FakeWorldEdit {
     public volatile String version = "7.3.8+1379-7d32b45";
     public final List<String> calls = new ArrayList<>();
     public volatile boolean schematicIoFails;
+    public final com.sk89q.worldedit.session.SessionManager sessionManager = new com.sk89q.worldedit.session.SessionManager();
+    public final com.sk89q.worldedit.LocalConfiguration configuration = new com.sk89q.worldedit.LocalConfiguration();
+    /** WorldEdit's working directory (its config folder); the real one is {@code config/worldedit}. */
+    public volatile java.nio.file.Path workingDirectory = java.nio.file.Paths.get("worldedit-working-dir").toAbsolutePath();
+    /** WorldEdit's configured maxRadius; -1 (the real default) means unlimited. */
+    public volatile int maxRadius = -1;
 
     public static void reset() { INSTANCE = new FakeWorldEdit(); }
 
@@ -46,7 +52,11 @@ public final class FakeWorldEdit {
     /** "Attempts" to change a fixed number of blocks, applied one at a time against the session's own
      *  configured limit (see {@link EditSession#applyWithLimit}) - not an atomic preflight check, so an
      *  edit that exceeds the limit still leaves the blocks up to the limit applied and recorded. */
+    /** Makes edits fail the way WorldEdit's NeoForge world does once its ServerLevel has been unloaded. */
+    public volatile boolean worldUnloaded;
+
     public int setBlocks(EditSession session, Region region, Pattern pattern) throws MaxChangedBlocksException {
+        if (worldUnloaded) throw new RuntimeException("The reference to the world was lost (i.e. the world may have been unloaded)");
         calls.add("setBlocks:" + region + ":" + pattern);
         return session.applyWithLimit(7);
     }
@@ -118,7 +128,11 @@ public final class FakeWorldEdit {
     private record NamedMask(String name) implements Mask {
         @Override public String toString() { return name; }
     }
+    /** A schematic as loaded: a 2x2x2 region, so a paste of it writes at most 8 blocks. */
     private record NamedClipboard(String name) implements Clipboard {
+        @Override public com.sk89q.worldedit.regions.Region getRegion() {
+            return new com.sk89q.worldedit.regions.CuboidRegion(BlockVector3.at(0, 0, 0), BlockVector3.at(1, 1, 1));
+        }
         @Override public String toString() { return name; }
     }
 }

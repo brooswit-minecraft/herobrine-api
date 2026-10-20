@@ -6,10 +6,9 @@ import java.util.List;
 /**
  * Namespaced ({@code worldedit.*}) discovery/schema inventory for every {@link WorldEditAdapter} operation:
  * name, description and a typed {@link ParamDef} list per method, built from this repo's existing schema
- * types. Declarative only - no {@code Function<Params, Object>} handler and no {@code ApiContext}/HTTP
- * registration (that needs a real platform {@code Actor}, which is MINECRAFT-476, not this ticket). The
- * point is that MINECRAFT-476 can attach a real {@code ActionDef}/{@code ResourceDef} handler to an
- * already-typed parameter schema instead of re-deriving one. See docs/worldedit-coverage.md.
+ * types. Declarative only: {@link WorldEditActions} holds each operation's handler, read/write kind and
+ * WorldEdit permission nodes, and {@link WorldEditBinding} registers these definitions as the HTTP
+ * actions/resources (MINECRAFT-476). See docs/worldedit-coverage.md.
  */
 public final class WorldEditSchema {
     private WorldEditSchema() {}
@@ -78,13 +77,16 @@ public final class WorldEditSchema {
                             ParamDef.required("y", "integer", "Paste origin Y"),
                             ParamDef.required("z", "integer", "Paste origin Z")), PASTE_OPTION_PARAMS.toArray(ParamDef[]::new))),
             new Operation("worldedit.save_schematic",
-                    "Write the actor's clipboard to a schematic file; format inferred from the file extension (WorldEditAdapter#saveSchematic)",
-                    List.of(ParamDef.required("file", "string", "Schematic file name"))),
+                    "Write the actor's clipboard, with its pending rotate/scale baked in, to a schematic file in WorldEdit's "
+                            + "own schematics folder; format inferred from the file extension (WorldEditAdapter#saveSchematic)",
+                    List.of(ParamDef.required("file", "string", "Bare file name in WorldEdit's schematics folder, e.g. house.schem"),
+                            ParamDef.optional("overwrite", "boolean",
+                                    "Replace an existing file (WorldEdit's -f flag; also needs worldedit.schematic.delete)", false))),
             new Operation("worldedit.load_schematic",
-                    "Read a schematic file into the actor's clipboard (WorldEditAdapter#loadSchematic)",
-                    List.of(ParamDef.required("file", "string", "Schematic file name"))),
+                    "Read a schematic file from WorldEdit's own schematics folder into the actor's clipboard (WorldEditAdapter#loadSchematic)",
+                    List.of(ParamDef.required("file", "string", "Bare file name in WorldEdit's schematics folder, e.g. house.schem"))),
             new Operation("worldedit.selection",
-                    "Axis-aligned bounding box of the actor's current selection (WorldEditAdapter#selection)",
+                    "Axis-aligned bounding box of the actor's current selection in the world it is editing (WorldEditAdapter#selection)",
                     List.of()),
             new Operation("worldedit.rotate_clipboard",
                     "Rotate the actor's clipboard in degrees, clockwise; takes effect on the next paste (WorldEditAdapter#rotateClipboard)",

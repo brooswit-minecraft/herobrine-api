@@ -11,6 +11,11 @@ base { archivesName = 'herobrine-api' }
 repositories {
     maven { url = 'https://maven-central.storage-download.googleapis.com/maven2' }
     mavenCentral()
+    // EngineHub's repository, for WorldEdit's own artifacts only (see the test dependency below).
+    exclusiveContent {
+        forRepository { maven { url = 'https://maven.enginehub.org/repo/' } }
+        filter { includeGroupByRegex 'com\\.sk89q(\\..*)?' }
+    }
 }
 
 neoForge {
@@ -34,6 +39,10 @@ dependencies {
     implementation project(':core')
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
+    // The real WorldEdit 7.3.8 for NeoForge, on the test runtime classpath only: WorldEditProvenanceTest
+    // resolves every WorldEdit class, method, constructor and field the adapter reaches by reflection against
+    // it. The mod itself never compiles against or bundles WorldEdit; it stays an optional runtime mod.
+    testRuntimeOnly 'com.sk89q.worldedit:worldedit-neoforge-mc1.21:7.3.8'
 }
 
 // ApiController (like the rest of main) touches Mojang/NeoForge logging classes that only live on
